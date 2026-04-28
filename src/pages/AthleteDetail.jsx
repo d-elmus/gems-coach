@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { SPORT_META, ZONE_COLORS, PHASE_COLORS, DAYS_SHORT } from '../lib/planHelpers'
@@ -51,9 +51,9 @@ function SessionRow({ s }) {
 }
 
 // ─── Coach plan widget ────────────────────────────────────────────────────────
-function CoachPlanWidget({ plan, athleteId, navigate }) {
-  const [weekIdx, setWeekIdx] = useState(() => getCurrentWeekIdx(plan))
-  const weekTabsRef = useState(null)[0]
+function CoachPlanWidget({ plan, athleteId, navigate, onActivate, activating }) {
+  const currentWeekIdxDefault = getCurrentWeekIdx(plan)
+  const [weekIdx, setWeekIdx] = useState(currentWeekIdxDefault)
   const weeks = plan.weeks || []
   const currentWeek = weeks[weekIdx]
   const totalSessions = weeks.reduce((a, w) => a + (w.sessions?.length || 0), 0)
@@ -116,6 +116,13 @@ function CoachPlanWidget({ plan, athleteId, navigate }) {
               style={{ background: COACH_COLOR }}>
               ✏️ Modifier le plan
             </button>
+            {!plan.is_active && (
+              <button onClick={onActivate} disabled={activating}
+                className="px-4 py-2 rounded-xl text-sm font-semibold text-center transition-opacity"
+                style={{ background: 'rgba(74,222,128,0.12)', color: '#4ade80', border: '1px solid rgba(74,222,128,0.3)', opacity: activating ? 0.6 : 1 }}>
+                {activating ? '...' : '▶ Activer ce plan'}
+              </button>
+            )}
             <button onClick={() => navigate(`/athletes/${athleteId}/plans`)}
               className="px-4 py-2 rounded-xl text-sm font-semibold text-center"
               style={{ background: 'var(--surface2)', color: 'var(--text2)', border: '1px solid var(--border)' }}>
@@ -128,23 +135,28 @@ function CoachPlanWidget({ plan, athleteId, navigate }) {
       {/* Week tabs */}
       <div className="px-6 py-2 overflow-x-auto" style={{ borderBottom: `1px solid ${COACH_COLOR}22` }}>
         <div className="flex gap-1.5 items-center min-w-max">
-          {weeks.map((w, i) => (
-            <button key={i} onClick={() => setWeekIdx(i)}
-              className="flex-shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all relative"
-              style={{
-                background: weekIdx === i ? (PHASE_COLORS[w.phase] || 'var(--red)') : 'var(--surface2)',
-                color: weekIdx === i ? '#fff' : 'var(--text3)',
-                border: weekIdx === i ? 'none' : '1px solid var(--border)',
-              }}>
-              S{w.weekNum}
-              {w.isRecovery && <span className="text-[7px] ml-0.5 opacity-70">R</span>}
-              {w.sessions?.length > 0 && (
-                <span className="ml-1 font-bold" style={{ color: weekIdx === i ? 'rgba(255,255,255,0.7)' : COACH_COLOR }}>
-                  {w.sessions.length}
-                </span>
-              )}
-            </button>
-          ))}
+          {weeks.map((w, i) => {
+            const isCurrent = i === currentWeekIdxDefault
+            const isSelected = i === weekIdx
+            return (
+              <button key={i} onClick={() => setWeekIdx(i)}
+                className="flex-shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all relative"
+                style={{
+                  background: isSelected ? (PHASE_COLORS[w.phase] || 'var(--red)') : 'var(--surface2)',
+                  color: isSelected ? '#fff' : isCurrent ? COACH_COLOR : 'var(--text3)',
+                  border: isSelected ? 'none' : `1px solid ${isCurrent ? COACH_COLOR + '55' : 'var(--border)'}`,
+                }}>
+                S{w.weekNum}
+                {w.isRecovery && <span className="text-[7px] ml-0.5 opacity-70">R</span>}
+                {isCurrent && !isSelected && <span className="text-[7px] ml-0.5" style={{ color: COACH_COLOR }}>●</span>}
+                {w.sessions?.length > 0 && (
+                  <span className="ml-1 font-bold" style={{ color: isSelected ? 'rgba(255,255,255,0.7)' : COACH_COLOR }}>
+                    {w.sessions.length}
+                  </span>
+                )}
+              </button>
+            )
+          })}
         </div>
       </div>
 
@@ -205,12 +217,15 @@ export default function AthleteDetail() {
   const navigate = useNavigate()
   const { coach } = useAuth()
 
-  const [athlete, setAthlete]   = useState(null)
-  const [coachPlan, setCoachPlan] = useState(null)
-  const [data, setData]         = useState(null)
-  const [loading, setLoading]   = useState(true)
+  const { state: navState } = useLocation()
 
-  useEffect(() => { fetchData() }, [id])
+  const [athlete, setAthlete]       = useState(null)
+  const [coachPlan, setCoachPlan]   = useState(null)
+  const [data, setData]             = useState(null)
+  const [loading, setLoading]       = useState(true)
+  const [activating, setActivating] = useState(false)
+
+  useEffect(() => { fetchData() }, [id, navState?.refresh])
 
   async function fetchData() {
     const [{ data: profile }, { data: allPlans }] = await Promise.all([
@@ -232,6 +247,15 @@ export default function AthleteDetail() {
       setCoachPlan(full)
     }
     setLoading(false)
+  }
+
+  async function activatePlan(planId) {
+    setActivating(true)
+    // Deactivate all other plans for this athlete, then activate this one
+    await supabase.from('plans').update({ is_active: false }).eq('user_id', id)
+    await supabase.from('plans').update({ is_active: true }).eq('id', planId).select('id')
+    setActivating(false)
+    fetchData()
   }
 
   if (loading) return (
@@ -287,7 +311,7 @@ export default function AthleteDetail() {
       {/* ── Coach plan widget ── */}
       <div className="mb-8">
         {coachPlan
-          ? <CoachPlanWidget plan={coachPlan} athleteId={id} navigate={navigate} />
+          ? <CoachPlanWidget plan={coachPlan} athleteId={id} navigate={navigate} onActivate={() => activatePlan(coachPlan.id)} activating={activating} />
           : (
             <div className="rounded-2xl p-6 flex items-center gap-5"
               style={{ background: `${COACH_COLOR}06`, border: `1px dashed ${COACH_COLOR}33` }}>

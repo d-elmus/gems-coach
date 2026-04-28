@@ -196,6 +196,15 @@ export default function PlanBuilder() {
 
   useEffect(() => { fetchData() }, [id, planId])
 
+  // Cmd+S / Ctrl+S to save
+  useEffect(() => {
+    const handler = e => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); savePlan() }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [weeks, meta, editingPlanId])
+
   async function fetchData() {
     const { data: profile } = await supabase.from('profiles').select('*').eq('id', id).single()
     setAthlete(profile)
@@ -447,7 +456,7 @@ export default function PlanBuilder() {
     setSaving(false)
     if (err) { setError('Erreur : ' + err.message); return }
     setSaved(true)
-    setTimeout(() => { setSaved(false); navigate(`/athletes/${id}`) }, 1200)
+    setTimeout(() => { setSaved(false); navigate(`/athletes/${id}`, { state: { refresh: Date.now() } }) }, 1200)
   }
 
   if (loading) return (

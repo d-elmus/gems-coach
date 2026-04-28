@@ -39,7 +39,7 @@ export default function Dashboard() {
       const ids = activeAthletes.map(r => r.athlete.id)
       const { data: plansData } = await supabase
         .from('plans')
-        .select('id,user_id,event_name,discipline,is_active,start_date,goal_date,athlete_metrics,weeks')
+        .select('id,user_id,event_name,discipline,is_active,start_date,goal_date,athlete_metrics')
         .in('user_id', ids)
         .order('created_at', { ascending: false })
 
@@ -138,7 +138,7 @@ export default function Dashboard() {
           {athletes.map(({ id: relId, athlete, started_at }) => {
             const plan = planMap[athlete.id]
             const hasPlan = !!plan
-            const totalSessions = hasPlan ? (plan.weeks || []).reduce((a, w) => a + (w.sessions?.length || 0), 0) : 0
+            const totalSessions = 0 // sessions count not loaded at this level (perf)
             const daysToGoal = plan?.goal_date
               ? Math.max(0, Math.round((parseDate(plan.goal_date) - new Date()) / 86400000))
               : null
@@ -181,8 +181,7 @@ export default function Dashboard() {
                         </span>
                       </div>
                       <div className="flex items-center gap-3 text-xs" style={{ color: 'var(--text3)' }}>
-                        <span>{(plan.weeks || []).length} sem.</span>
-                        <span>{totalSessions} séances</span>
+                        <span>{plan.discipline}</span>
                         {plan.start_date && <span>→ {parseDate(plan.start_date).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}</span>}
                       </div>
                     </div>
