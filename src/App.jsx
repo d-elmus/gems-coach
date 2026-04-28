@@ -5,6 +5,7 @@ import Login from './pages/Login'
 import Register from './pages/Register'
 import Dashboard from './pages/Dashboard'
 import AthleteDetail from './pages/AthleteDetail'
+import AthleteDetailPlans from './pages/AthleteDetailPlans'
 import AthletePlan from './pages/AthletePlan'
 import PlanBuilder from './pages/PlanBuilder'
 import { MessagesList, Conversation } from './pages/Messages'
@@ -39,6 +40,7 @@ export default function App() {
           <Route path="/" element={<PrivateRoute><Dashboard /></PrivateRoute>} />
           <Route path="/athletes/:id" element={<PrivateRoute><AthleteDetail /></PrivateRoute>} />
           <Route path="/athletes/:id/plan" element={<PrivateRoute><AthletePlan /></PrivateRoute>} />
+          <Route path="/athletes/:id/plans" element={<PrivateRoute><AthleteDetailPlans /></PrivateRoute>} />
           <Route path="/athletes/:id/builder" element={<PrivateRoute><PlanBuilder /></PrivateRoute>} />
           <Route path="/messages" element={<PrivateRoute><MessagesList /></PrivateRoute>} />
           <Route path="/messages/:id" element={<PrivateRoute><Conversation /></PrivateRoute>} />

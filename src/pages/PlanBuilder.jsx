@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { useAuth } from '../context/AuthContext'
 import SessionModal from '../components/SessionModal'
 import {
   autoAssignPhases, weekTSSTarget, SPORT_META, ZONE_COLORS,
@@ -16,35 +17,53 @@ function nextMonday() {
   return d.toISOString().slice(0,10)
 }
 
+// Parse "YYYY-MM-DD" safely (avoids UTC midnight timezone issues)
+function parseDate(str) {
+  return str ? new Date(str + 'T12:00:00') : new Date()
+}
+
 // ─── Mini TSS bar chart ───────────────────────────────────────────────────────
-function LoadChart({ weeks }) {
+function LoadChart({ weeks, selectedWeek, onSelect }) {
   if (!weeks.length) return null
-  const maxTSS = Math.max(...weeks.map(w => w.targetTSS || 0), 1)
+  const maxTSS = Math.max(...weeks.map(w => Math.max(w.targetTSS || 0, w.actualTSS || 0)), 1)
   return (
     <div>
       <p className="text-[10px] font-bold uppercase tracking-widest mb-2" style={{ color: 'var(--text3)' }}>
-        Charge prévisionnelle (TSS / semaine)
+        Charge prévisionnelle (TSS)
       </p>
       <div className="flex items-end gap-0.5 h-16">
         {weeks.map((w, i) => (
-          <div key={i} className="flex-1 flex flex-col items-center gap-0.5 group relative">
-            <div className="w-full rounded-sm transition-all"
+          <div key={i} onClick={() => onSelect(i)}
+            className="flex-1 flex flex-col items-end gap-0.5 group relative cursor-pointer"
+            title={`S${w.weekNum} ${w.phase}${w.isRecovery?' REC':''} · cible ${w.targetTSS} · actuel ${w.actualTSS||0}`}>
+            {/* Actual TSS (filled) */}
+            <div className="w-full rounded-sm absolute bottom-0"
+              style={{
+                height: `${Math.round(((w.actualTSS || 0) / maxTSS) * 56)}px`,
+                background: w.isRecovery ? 'rgba(34,197,212,0.3)' : (PHASE_COLORS[w.phase] || 'var(--red)') + '55',
+                minHeight: w.actualTSS ? 2 : 0,
+              }} />
+            {/* Target TSS (outline) */}
+            <div className="w-full rounded-sm absolute bottom-0"
               style={{
                 height: `${Math.round(((w.targetTSS || 0) / maxTSS) * 56)}px`,
-                background: w.isRecovery ? 'rgba(34,197,212,0.4)' : (PHASE_COLORS[w.phase] || 'var(--red)') + 'CC',
+                border: `1px solid ${selectedWeek === i ? '#fff' : (PHASE_COLORS[w.phase] || 'var(--red)') + '88'}`,
                 minHeight: 2,
               }} />
-            <span className="text-[8px] absolute -bottom-4 opacity-0 group-hover:opacity-100 transition-opacity"
-              style={{ color: 'var(--text3)' }}>S{w.weekNum}</span>
           </div>
         ))}
+      </div>
+      <div className="flex justify-between text-[9px] mt-5" style={{ color: 'var(--text3)' }}>
+        <span>S1</span>
+        <span>S{Math.ceil(weeks.length/2)}</span>
+        <span>S{weeks.length}</span>
       </div>
     </div>
   )
 }
 
 // ─── Week sport summary ────────────────────────────────────────────────────────
-function WeekSummary({ sessions }) {
+function WeekSummary({ sessions, targetTSS }) {
   const sports = ['swim','bike','run','brick','strength']
   const stats = sports.map(s => {
     const ss = sessions.filter(x => x.sport === s)
@@ -52,9 +71,11 @@ function WeekSummary({ sessions }) {
     const dist = ss.reduce((a,x) => a + (x.distance || 0), 0)
     return { sport: s, count: ss.length, min, dist }
   }).filter(s => s.count > 0)
-  if (!stats.length) return null
+  const actualTSS = sessions.reduce((a,s) => a + (s.tss||0), 0)
+  const pct = targetTSS ? Math.round((actualTSS / targetTSS) * 100) : 0
+
   return (
-    <div className="flex gap-3 flex-wrap">
+    <div className="flex items-center gap-3 flex-wrap">
       {stats.map(s => {
         const m = SPORT_META[s.sport]
         return (
@@ -65,20 +86,26 @@ function WeekSummary({ sessions }) {
           </div>
         )
       })}
-      <span className="ml-auto text-xs font-mono" style={{ color: 'var(--text3)' }}>
-        TSS ~{sessions.reduce((a,s)=>a+(s.tss||0),0)}
-      </span>
+      <div className="ml-auto flex items-center gap-2 text-xs">
+        <span className="font-mono" style={{ color: COACH_COLOR }}>TSS {actualTSS}</span>
+        {targetTSS > 0 && (
+          <span style={{ color: pct >= 90 ? '#4ade80' : pct >= 70 ? 'var(--text2)' : 'var(--text3)' }}>
+            / {targetTSS} ({pct}%)
+          </span>
+        )}
+      </div>
     </div>
   )
 }
 
 // ─── Session card ──────────────────────────────────────────────────────────────
-function SessionCard({ session: s, onRemove }) {
+function SessionCard({ session: s, onRemove, onClick }) {
   const m = SPORT_META[s.sport] || SPORT_META.run
-  const d = new Date(s.date)
+  const d = parseDate(s.date)
   const day = DAYS_SHORT[d.getDay() === 0 ? 6 : d.getDay() - 1]
   return (
-    <div className="rounded-2xl p-4 relative group"
+    <div className="rounded-2xl p-4 relative group cursor-pointer transition-all hover:opacity-90"
+      onClick={onClick}
       style={{ background: 'var(--surface)', border: `1px solid ${COACH_COLOR}33` }}>
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-start gap-3">
@@ -95,17 +122,22 @@ function SessionCard({ session: s, onRemove }) {
                   {s.zone}
                 </span>
               )}
+              {s.instructions && (
+                <span className="text-[9px] px-1 py-0.5 rounded" style={{ background: 'rgba(34,197,212,0.1)', color: COACH_COLOR }}>
+                  📋 instructions
+                </span>
+              )}
             </div>
             <p className="text-sm font-semibold text-white leading-tight">{s.label}</p>
             <div className="flex gap-2 text-xs mt-0.5" style={{ color: 'var(--text3)' }}>
               <span>⏱ {s.duration}min</span>
-              {s.distance && <span>{s.distance}{m.distUnit}</span>}
-              <span>TSS ~{s.tss}</span>
+              {s.distance != null && s.distance > 0 && <span>{s.distance}{m.distUnit}</span>}
+              <span style={{ color: COACH_COLOR }}>TSS {s.tss}</span>
             </div>
             {s.coachNote && <p className="text-xs mt-1 italic truncate" style={{ color: COACH_COLOR }}>"{s.coachNote}"</p>}
           </div>
         </div>
-        <button onClick={onRemove}
+        <button onClick={e => { e.stopPropagation(); onRemove() }}
           className="opacity-0 group-hover:opacity-100 w-6 h-6 rounded-lg flex items-center justify-center text-xs flex-shrink-0 transition-opacity"
           style={{ background: 'rgba(239,68,68,0.15)', color: '#f87171' }}>✕</button>
       </div>
@@ -117,29 +149,30 @@ function SessionCard({ session: s, onRemove }) {
 export default function PlanBuilder() {
   const { id } = useParams()
   const navigate = useNavigate()
+  const { coach } = useAuth()
 
   const [athlete, setAthlete]         = useState(null)
   const [athletePlan, setAthletePlan] = useState(null)
   const [loading, setLoading]         = useState(true)
   const [saving, setSaving]           = useState(false)
+  const [error, setError]             = useState(null)
   const [showModal, setShowModal]     = useState(false)
+  const [editingSession, setEditingSession] = useState(null) // { weekIdx, session }
   const [selectedWeek, setSelectedWeek] = useState(0)
   const [weeks, setWeeks]             = useState([])
 
-  // Plan metadata
   const [meta, setMeta] = useState({
-    name:       '',
-    discipline: 'halfIronman',
-    level:      'intermediate',
-    startDate:  nextMonday(),
-    goalDate:   '',
+    name:        '',
+    discipline:  'halfIronman',
+    level:       'intermediate',
+    startDate:   nextMonday(),
+    goalDate:    '',
     daysPerWeek: 5,
     recoveryFreq: 4,
     description: '',
   })
   const setM = k => e => setMeta(m => ({ ...m, [k]: e.target.value }))
 
-  // Auto-derive total weeks from dates
   const totalWeeks = useMemo(() => {
     if (!meta.startDate || !meta.goalDate) return weeks.length || 0
     const diff = Math.round((new Date(meta.goalDate) - new Date(meta.startDate)) / (7 * 86400000))
@@ -167,13 +200,12 @@ export default function PlanBuilder() {
     setLoading(false)
   }
 
-  // Rebuild weeks when dates/settings change
   function generateWeeks() {
     if (!meta.startDate) return
     const n = totalWeeks || 12
     const phases = autoAssignPhases(n, parseInt(meta.recoveryFreq))
     setWeeks(Array.from({ length: n }, (_, i) => {
-      const ws = new Date(meta.startDate)
+      const ws = new Date(meta.startDate + 'T12:00:00')
       ws.setDate(ws.getDate() + i * 7)
       return {
         weekNum:    i + 1,
@@ -190,7 +222,7 @@ export default function PlanBuilder() {
   }
 
   function getWeekStartDate(weekIdx) {
-    const base = new Date(meta.startDate)
+    const base = new Date(meta.startDate + 'T12:00:00')
     base.setDate(base.getDate() + weekIdx * 7)
     return base
   }
@@ -208,18 +240,20 @@ export default function PlanBuilder() {
   }
 
   function removeWeek(idx) {
+    if (weeks[idx]?.sessions?.length > 0) {
+      if (!window.confirm(`Supprimer la semaine ${idx+1} (${weeks[idx].sessions.length} séance${weeks[idx].sessions.length > 1 ? 's' : ''}) ?`)) return
+    }
     setWeeks(prev => prev.filter((_,i)=>i!==idx).map((w,i)=>({...w,weekNum:i+1})))
-    setSelectedWeek(Math.max(0,idx-1))
+    setSelectedWeek(Math.max(0, idx - 1))
   }
 
   function duplicateWeek(idx) {
     const src = weeks[idx]
     const newIdx = idx + 1
     const ws = getWeekStartDate(newIdx)
-    // Shift session dates to new week
     const sessions = src.sessions.map(s => {
-      const origDate = new Date(s.date)
-      const origWeekStart = new Date(src.weekStart)
+      const origDate = parseDate(s.date)
+      const origWeekStart = parseDate(src.weekStart)
       const dayOffset = Math.round((origDate - origWeekStart) / 86400000)
       const newDate = new Date(ws)
       newDate.setDate(ws.getDate() + dayOffset)
@@ -227,7 +261,7 @@ export default function PlanBuilder() {
     })
     setWeeks(prev => {
       const updated = [...prev]
-      updated.splice(newIdx, 0, { ...src, weekNum: newIdx+1, weekStart: ws.toISOString().slice(0,10), actualTSS: 0, sessions })
+      updated.splice(newIdx, 0, { ...src, weekNum: newIdx+1, weekStart: ws.toISOString().slice(0,10), actualTSS: src.actualTSS, sessions })
       return updated.map((w,i) => ({ ...w, weekNum: i+1 }))
     })
     setSelectedWeek(newIdx)
@@ -238,16 +272,50 @@ export default function PlanBuilder() {
   }
 
   function removeSession(weekIdx, sessionId) {
-    setWeeks(prev => prev.map((w,i) =>
-      i===weekIdx ? {...w, sessions: w.sessions.filter(s=>s.id!==sessionId)} : w
-    ))
+    setWeeks(prev => prev.map((w,i) => {
+      if (i !== weekIdx) return w
+      const sessions = w.sessions.filter(s => s.id !== sessionId)
+      return { ...w, sessions, actualTSS: sessions.reduce((acc,s) => acc+(s.tss||0), 0) }
+    }))
+  }
+
+  function openEditSession(weekIdx, session) {
+    setEditingSession({ weekIdx, session })
+    setSelectedWeek(weekIdx)
+    setShowModal(true)
   }
 
   function handleAddSessions(form) {
+    // Edit mode: replace the existing session
+    if (form.editId) {
+      setWeeks(prev => prev.map((wk, i) => {
+        if (i !== editingSession.weekIdx) return wk
+        const weekStartDate = new Date(wk.weekStart + 'T12:00:00')
+        const sessionDate = new Date(weekStartDate)
+        sessionDate.setDate(weekStartDate.getDate() + parseInt(form.dayOfWeek))
+        const dateStr = sessionDate.toISOString().slice(0,10)
+        const tss = Math.round(form.duration * (form.zone === 'Z1' ? 0.5 : form.zone === 'Z2' ? 0.8 : form.zone === 'Z3' ? 1.1 : form.zone === 'Z4' ? 1.4 : 1.6))
+        const updated = {
+          ...editingSession.session,
+          sport: form.sport, label: form.label, date: dateStr,
+          duration: form.duration, distance: form.distance,
+          zone: form.zone, tss,
+          coachNote: form.note || undefined,
+          instructions: form.instructions || undefined,
+        }
+        const sessions = wk.sessions.map(s => s.id === form.editId ? updated : s)
+          .sort((a,b) => String(a.date).localeCompare(String(b.date)))
+        return { ...wk, sessions, actualTSS: sessions.reduce((acc,s) => acc+(s.tss||0), 0) }
+      }))
+      setEditingSession(null)
+      setShowModal(false)
+      return
+    }
+
+    // Add mode: create new session(s) with recurrence
     const repeatCount = parseInt(form.repeat)
     setWeeks(prev => {
       let updated = [...prev]
-      // Ensure enough weeks
       while (updated.length < selectedWeek + repeatCount) {
         const idx = updated.length
         const ws = getWeekStartDate(idx)
@@ -261,7 +329,7 @@ export default function PlanBuilder() {
       for (let w = 0; w < repeatCount; w++) {
         const weekIdx = selectedWeek + w
         const wk = updated[weekIdx]
-        const weekStartDate = new Date(wk.weekStart)
+        const weekStartDate = new Date(wk.weekStart + 'T12:00:00')
         const sessionDate = new Date(weekStartDate)
         sessionDate.setDate(weekStartDate.getDate() + parseInt(form.dayOfWeek))
         const dateStr = sessionDate.toISOString().slice(0,10)
@@ -289,35 +357,36 @@ export default function PlanBuilder() {
   }
 
   async function savePlan() {
-    if (!meta.startDate) { alert('Définis une date de début.'); return }
+    if (!meta.startDate) { setError('Définis une date de début.'); return }
     const totalS = weeks.reduce((acc,w)=>acc+w.sessions.length,0)
-    if (totalS === 0) { alert('Ajoute au moins une séance.'); return }
+    if (totalS === 0) { setError('Ajoute au moins une séance avant de publier.'); return }
+    setError(null)
     setSaving(true)
-    try {
-      const { error } = await supabase.from('plans').insert({
-        user_id:     id,
-        discipline:  meta.discipline,
-        level:       meta.level,
-        start_date:  meta.startDate,
-        goal_date:   meta.goalDate || null,
-        event_name:  meta.name || meta.discipline,
-        is_active:   false,
-        weeks,
-        completed_sessions: {},
-        pbs:              athletePlan?.pbs || {},
-        zones:            athletePlan?.zones || {},
-        equipment:        athletePlan?.equipment || {},
-        age:              athlete?.age || null,
-        hrmax:            athletePlan?.hrmax || null,
-        skill_levels:     {},
-        performance_factor: { run:1, bike:1 },
-        athlete_grades:   athletePlan?.athlete_grades || {},
-        scores:           athletePlan?.scores || {},
-        athlete_metrics:  athletePlan?.athlete_metrics || {},
-      })
-      if (error) { alert('Erreur : ' + error.message); setSaving(false); return }
-      navigate(`/athletes/${id}`)
-    } catch(e) { alert('Erreur : ' + e.message); setSaving(false) }
+    const { error: err } = await supabase.from('plans').insert({
+      user_id:     id,
+      discipline:  meta.discipline,
+      level:       meta.level,
+      start_date:  meta.startDate,
+      goal_date:   meta.goalDate || null,
+      event_name:  meta.name || meta.discipline,
+      is_active:   false,
+      weeks,
+      completed_sessions: {},
+      pbs:              athletePlan?.pbs || {},
+      zones:            athletePlan?.zones || {},
+      equipment:        athletePlan?.equipment || {},
+      age:              athlete?.age || null,
+      hrmax:            athletePlan?.hrmax || null,
+      skill_levels:     {},
+      performance_factor: { run:1, bike:1 },
+      athlete_grades:   athletePlan?.athlete_grades || {},
+      scores:           athletePlan?.scores || {},
+      athlete_metrics:  { ...(athletePlan?.athlete_metrics || {}), coachId: coach?.id },
+      description:      meta.description || null,
+    }).select('id')
+    setSaving(false)
+    if (err) { setError('Erreur : ' + err.message); return }
+    navigate(`/athletes/${id}/plans`)
   }
 
   if (loading) return (
@@ -340,7 +409,8 @@ export default function PlanBuilder() {
           totalWeeks={weeks.length}
           athletePlan={athletePlan}
           onAdd={handleAddSessions}
-          onClose={() => setShowModal(false)}
+          onClose={() => { setShowModal(false); setEditingSession(null) }}
+          editSession={editingSession?.session}
         />
       )}
 
@@ -445,17 +515,20 @@ export default function PlanBuilder() {
           </div>
 
           {/* Load chart */}
-          {weeks.length > 0 && <LoadChart weeks={weeks} />}
+          {weeks.length > 0 && (
+            <LoadChart weeks={weeks} selectedWeek={selectedWeek} onSelect={setSelectedWeek} />
+          )}
 
           {/* Athlete reference — PBs */}
           {Object.keys(pbs).length > 0 && (
             <div>
-              <p className="text-[10px] font-bold uppercase tracking-widest mb-2" style={{ color:'var(--text3)' }}>Records</p>
+              <p className="text-[10px] font-bold uppercase tracking-widest mb-2" style={{ color:'var(--text3)' }}>Records athlète</p>
               <div className="rounded-xl p-3 flex flex-col gap-1.5" style={{ background:'var(--surface2)' }}>
                 {pbs.pace5k  && <div className="flex justify-between text-xs"><span style={{ color:'var(--text3)' }}>5K</span><span className="font-mono text-white">{pbs.pace5k}/km</span></div>}
                 {pbs.runTime && <div className="flex justify-between text-xs"><span style={{ color:'var(--text3)' }}>Semi ({pbs.runDist})</span><span className="font-mono text-white">{pbs.runTime}</span></div>}
                 {pbs.ftp     && <div className="flex justify-between text-xs"><span style={{ color:'var(--text3)' }}>FTP</span><span className="font-mono text-white">{pbs.ftp}W</span></div>}
                 {pbs.css     && <div className="flex justify-between text-xs"><span style={{ color:'var(--text3)' }}>CSS</span><span className="font-mono text-white">{pbs.css}/100m</span></div>}
+                {pbs.weight  && <div className="flex justify-between text-xs"><span style={{ color:'var(--text3)' }}>Poids</span><span className="font-mono text-white">{pbs.weight}kg</span></div>}
               </div>
             </div>
           )}
@@ -478,20 +551,22 @@ export default function PlanBuilder() {
             </div>
           )}
 
-          {/* Bike zones */}
-          {zones.bike?.hrZones && (
+          {/* Bike zones / FTP */}
+          {(zones.bike?.hrZones || pbs.ftp) && (
             <div>
               <p className="text-[10px] font-bold uppercase tracking-widest mb-2" style={{ color:'var(--text3)' }}>
-                Zones vélo {athletePlan?.pbs?.ftp && `· FTP ${athletePlan.pbs.ftp}W`}
+                Zones vélo {pbs.ftp && `· FTP ${pbs.ftp}W`}
               </p>
-              <div className="rounded-xl p-3" style={{ background:'var(--surface2)' }}>
-                {Object.entries(zones.bike.hrZones).filter(([k])=>k.startsWith('z')).map(([k,v]) => (
-                  <div key={k} className="flex justify-between text-[11px] mb-1">
-                    <span style={{ color:'var(--text3)' }} className="truncate flex-1">{v.label}</span>
-                    <span className="font-mono text-white ml-2">{v.min}–{v.max===999?'∞':v.max}</span>
-                  </div>
-                ))}
-              </div>
+              {zones.bike?.hrZones && (
+                <div className="rounded-xl p-3" style={{ background:'var(--surface2)' }}>
+                  {Object.entries(zones.bike.hrZones).filter(([k])=>k.startsWith('z')).map(([k,v]) => (
+                    <div key={k} className="flex justify-between text-[11px] mb-1">
+                      <span style={{ color:'var(--text3)' }} className="truncate flex-1">{v.label}</span>
+                      <span className="font-mono text-white ml-2">{v.min}–{v.max===999?'∞':v.max}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -509,13 +584,18 @@ export default function PlanBuilder() {
               {weeks.length} sem. · {totalSessions} séance{totalSessions!==1?'s':''} · publié comme plan inactif
             </p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 items-center">
+            {error && (
+              <span className="text-xs px-3 py-1.5 rounded-xl" style={{ background:'rgba(239,68,68,0.1)', color:'#f87171' }}>
+                {error}
+              </span>
+            )}
             <button onClick={addWeek}
               className="px-3 py-2 rounded-xl text-sm font-semibold"
               style={{ background:'var(--surface2)', color:'var(--text2)', border:'1px solid var(--border)' }}>
               + Semaine
             </button>
-            <button onClick={() => setShowModal(true)}
+            <button onClick={() => { setEditingSession(null); setShowModal(true) }}
               className="px-3 py-2 rounded-xl text-sm font-semibold text-white"
               style={{ background:COACH_COLOR }}>
               + Séance
@@ -537,12 +617,16 @@ export default function PlanBuilder() {
               style={{
                 background: selectedWeek===i ? (PHASE_COLORS[w.phase]||'var(--red)') : 'var(--surface)',
                 color: selectedWeek===i ? '#fff' : 'var(--text2)',
-                border: `1px solid ${selectedWeek===i?'transparent':'var(--border)'}`,
+                border: `1px solid ${selectedWeek===i ? 'transparent' : 'var(--border)'}`,
               }}>
               <span>S{w.weekNum}</span>
               {w.isRecovery && <span className="text-[8px] opacity-70">REC</span>}
               <span className="opacity-60 text-[9px]">{w.phase}</span>
-              {w.sessions.length>0 && <span className="font-bold">{w.sessions.length}</span>}
+              {w.sessions.length > 0 && (
+                <span className="font-bold" style={{ color: selectedWeek===i ? 'rgba(255,255,255,0.8)' : COACH_COLOR }}>
+                  {w.sessions.length}
+                </span>
+              )}
             </button>
           ))}
           {weeks.length === 0 && (
@@ -584,18 +668,16 @@ export default function PlanBuilder() {
                       </span>
                     )}
                     <span className="text-sm" style={{ color:'var(--text3)' }}>
-                      {new Date(currentWeek.weekStart).toLocaleDateString('fr-FR',{day:'numeric',month:'long'})}
+                      {parseDate(currentWeek.weekStart).toLocaleDateString('fr-FR',{day:'numeric',month:'long'})}
                     </span>
                   </div>
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
-                  {/* Phase */}
                   <select value={currentWeek.phase} onChange={e => updateWeek(selectedWeek,{phase:e.target.value})}
                     className="px-3 py-1.5 rounded-xl text-xs font-bold text-white outline-none"
                     style={{ background:PHASE_COLORS[currentWeek.phase]||'var(--red)', border:'none', colorScheme:'dark' }}>
                     {PHASES.map(p => <option key={p} value={p}>{p}</option>)}
                   </select>
-                  {/* Recovery toggle */}
                   <button onClick={() => updateWeek(selectedWeek,{isRecovery:!currentWeek.isRecovery})}
                     className="px-3 py-1.5 rounded-xl text-xs font-semibold"
                     style={{
@@ -605,7 +687,6 @@ export default function PlanBuilder() {
                     }}>
                     {currentWeek.isRecovery ? '✓ Récup' : 'Récup'}
                   </button>
-                  {/* TSS target */}
                   <div className="flex items-center gap-1">
                     <span className="text-xs" style={{ color:'var(--text3)' }}>TSS cible</span>
                     <input type="number" value={currentWeek.targetTSS}
@@ -613,7 +694,7 @@ export default function PlanBuilder() {
                       className="w-16 px-2 py-1 rounded-lg text-xs text-white outline-none font-mono"
                       style={{ background:'var(--surface2)', border:'1px solid var(--border)' }} />
                   </div>
-                  <button onClick={() => setShowModal(true)}
+                  <button onClick={() => { setEditingSession(null); setShowModal(true) }}
                     className="px-3 py-1.5 rounded-xl text-xs font-semibold text-white"
                     style={{ background:COACH_COLOR }}>
                     + Séance
@@ -647,7 +728,7 @@ export default function PlanBuilder() {
                   <p className="text-sm mb-4" style={{ color:'var(--text3)' }}>
                     Ajoute des séances. Tu peux les répéter sur plusieurs semaines automatiquement.
                   </p>
-                  <button onClick={() => setShowModal(true)} className="text-sm font-bold" style={{ color:COACH_COLOR }}>
+                  <button onClick={() => { setEditingSession(null); setShowModal(true) }} className="text-sm font-bold" style={{ color:COACH_COLOR }}>
                     + Ajouter une séance →
                   </button>
                 </div>
@@ -655,10 +736,14 @@ export default function PlanBuilder() {
                 <>
                   <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 mb-4">
                     {currentWeek.sessions.map(s => (
-                      <SessionCard key={s.id} session={s} onRemove={() => removeSession(selectedWeek, s.id)} />
+                      <SessionCard
+                        key={s.id}
+                        session={s}
+                        onRemove={() => removeSession(selectedWeek, s.id)}
+                        onClick={() => openEditSession(selectedWeek, s)}
+                      />
                     ))}
-                    {/* Add button at end of grid */}
-                    <button onClick={() => setShowModal(true)}
+                    <button onClick={() => { setEditingSession(null); setShowModal(true) }}
                       className="rounded-2xl p-4 flex flex-col items-center justify-center gap-2 transition-all hover:opacity-80"
                       style={{ background:'transparent', border:`2px dashed ${COACH_COLOR}44`, color:COACH_COLOR, minHeight:80 }}>
                       <span className="text-2xl">+</span>
@@ -666,7 +751,7 @@ export default function PlanBuilder() {
                     </button>
                   </div>
                   <div className="pt-3 border-t" style={{ borderColor:'var(--border)' }}>
-                    <WeekSummary sessions={currentWeek.sessions} />
+                    <WeekSummary sessions={currentWeek.sessions} targetTSS={currentWeek.targetTSS} />
                   </div>
                 </>
               )}

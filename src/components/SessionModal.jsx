@@ -7,7 +7,9 @@ import {
 const ZONES = ['Z1','Z2','Z3','Z4','Z5']
 const COACH_COLOR = '#22C5D5'
 
-export default function SessionModal({ weekStart, weekIdx, totalWeeks, athletePlan, onAdd, onClose }) {
+export default function SessionModal({ weekStart, weekIdx, totalWeeks, athletePlan, onAdd, onClose, editSession }) {
+  const isEdit = !!editSession
+
   const [sport, setSport]         = useState('run')
   const [preset, setPreset]       = useState(null)
   const [label, setLabel]         = useState('')
@@ -20,7 +22,24 @@ export default function SessionModal({ weekStart, weekIdx, totalWeeks, athletePl
   const [repeat, setRepeat]       = useState(1)
   const [skipRecovery, setSkipRecovery] = useState(true)
 
-  // Zone targets from athlete data
+  // Populate fields when editing an existing session
+  useEffect(() => {
+    if (!editSession) return
+    setSport(editSession.sport || 'run')
+    setLabel(editSession.label || '')
+    setDuration(editSession.duration || 45)
+    setDistance(editSession.distance != null ? editSession.distance : '')
+    setZone(editSession.zone || 'Z2')
+    setNote(editSession.coachNote || '')
+    setInstructions(editSession.instructions || '')
+    // Compute day-of-week from date string relative to weekStart
+    if (editSession.date && weekStart) {
+      const d = new Date(editSession.date + 'T12:00:00')
+      const jsDay = d.getDay() // 0=Sun, 1=Mon...
+      setDayOfWeek(jsDay === 0 ? 6 : jsDay - 1)
+    }
+  }, [editSession])
+
   const zoneTarget = getZoneTargets(athletePlan, sport, zone)
 
   function applyPreset(p) {
@@ -33,7 +52,19 @@ export default function SessionModal({ weekStart, weekIdx, totalWeeks, athletePl
 
   const presets = SESSION_PRESETS[sport] || []
   const sportM  = SPORT_META[sport]
-  const maxRepeat = totalWeeks - weekIdx
+  const maxRepeat = Math.max(1, totalWeeks - weekIdx)
+
+  function handleSubmit() {
+    onAdd({
+      sport, label, dayOfWeek,
+      duration: parseInt(duration),
+      distance: distance !== '' ? parseFloat(distance) : null,
+      zone, note, instructions,
+      repeat: isEdit ? 1 : repeat,
+      skipRecovery,
+      editId: isEdit ? editSession.id : undefined,
+    })
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
@@ -44,7 +75,9 @@ export default function SessionModal({ weekStart, weekIdx, totalWeeks, athletePl
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b sticky top-0 z-10"
           style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
-          <h3 className="font-bold text-white text-lg">Créer une séance</h3>
+          <h3 className="font-bold text-white text-lg">
+            {isEdit ? 'Modifier la séance' : 'Créer une séance'}
+          </h3>
           <button onClick={onClose} className="w-8 h-8 rounded-lg flex items-center justify-center"
             style={{ background: 'var(--surface2)', color: 'var(--text3)' }}>✕</button>
         </div>
@@ -145,7 +178,6 @@ export default function SessionModal({ weekStart, weekIdx, totalWeeks, athletePl
                 </button>
               ))}
             </div>
-            {/* Zone targets from athlete data */}
             {zoneTarget && (
               <div className="rounded-xl px-3 py-2 flex flex-wrap gap-3 text-xs" style={{ background: 'var(--surface2)' }}>
                 {zoneTarget.pace  && <span style={{ color: ZONE_COLORS[zone] }}>🏃 {zoneTarget.pace}</span>}
@@ -170,7 +202,7 @@ export default function SessionModal({ weekStart, weekIdx, totalWeeks, athletePl
           {/* Note coach */}
           <div>
             <label className="text-[10px] font-bold uppercase tracking-widest mb-1.5 block" style={{ color: 'var(--text3)' }}>
-              Note coach privée <span style={{ color: 'var(--text3)', fontWeight:400 }}>(s'affiche sur la carte de séance)</span>
+              Note coach privée <span style={{ color: 'var(--text3)', fontWeight:400 }}>(s'affiche sur la carte)</span>
             </label>
             <textarea value={note} onChange={e => setNote(e.target.value)}
               placeholder="Conseils techniques, focus de la séance..."
@@ -178,42 +210,46 @@ export default function SessionModal({ weekStart, weekIdx, totalWeeks, athletePl
               style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }} />
           </div>
 
-          {/* Récurrence */}
-          <div className="rounded-xl p-4" style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }}>
-            <div className="flex items-center justify-between mb-3">
-              <label className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--text3)' }}>Récurrence</label>
-              <span className="text-sm font-bold" style={{ color: COACH_COLOR }}>
-                {repeat === 1 ? 'Semaine actuelle uniquement' : `Répéter sur ${repeat} semaines`}
-              </span>
-            </div>
-            <input type="range" min={1} max={Math.max(1, maxRepeat)} value={repeat}
-              onChange={e => setRepeat(parseInt(e.target.value))}
-              className="w-full mb-2" style={{ accentColor: COACH_COLOR }} />
-            <div className="flex justify-between text-[10px]" style={{ color: 'var(--text3)' }}>
-              <span>1 sem.</span>
-              <span>{Math.ceil(maxRepeat / 2)} sem.</span>
-              <span>{maxRepeat} sem. (fin du plan)</span>
-            </div>
-            {repeat > 1 && (
-              <label className="flex items-center gap-2 mt-3 cursor-pointer">
-                <input type="checkbox" checked={skipRecovery} onChange={e => setSkipRecovery(e.target.checked)}
-                  style={{ accentColor: COACH_COLOR }} />
-                <span className="text-xs" style={{ color: 'var(--text2)' }}>
-                  Volume réduit (-30%) sur les semaines de récupération
+          {/* Récurrence — hidden when editing */}
+          {!isEdit && (
+            <div className="rounded-xl p-4" style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }}>
+              <div className="flex items-center justify-between mb-3">
+                <label className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--text3)' }}>Récurrence</label>
+                <span className="text-sm font-bold" style={{ color: COACH_COLOR }}>
+                  {repeat === 1 ? 'Semaine actuelle uniquement' : `Répéter sur ${repeat} semaines`}
                 </span>
-              </label>
-            )}
-          </div>
+              </div>
+              <input type="range" min={1} max={maxRepeat} value={repeat}
+                onChange={e => setRepeat(parseInt(e.target.value))}
+                className="w-full mb-2" style={{ accentColor: COACH_COLOR }} />
+              <div className="flex justify-between text-[10px]" style={{ color: 'var(--text3)' }}>
+                <span>1 sem.</span>
+                <span>{Math.ceil(maxRepeat / 2)} sem.</span>
+                <span>{maxRepeat} sem. (fin du plan)</span>
+              </div>
+              {repeat > 1 && (
+                <label className="flex items-center gap-2 mt-3 cursor-pointer">
+                  <input type="checkbox" checked={skipRecovery} onChange={e => setSkipRecovery(e.target.checked)}
+                    style={{ accentColor: COACH_COLOR }} />
+                  <span className="text-xs" style={{ color: 'var(--text2)' }}>
+                    Volume réduit (-30%) sur les semaines de récupération
+                  </span>
+                </label>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Footer CTA */}
         <div className="px-6 pb-6 pt-2 sticky bottom-0" style={{ background: 'var(--surface)' }}>
           <button
-            onClick={() => onAdd({ sport, label, dayOfWeek, duration: parseInt(duration), distance: distance !== '' ? parseFloat(distance) : null, zone, note, instructions, repeat, skipRecovery })}
+            onClick={handleSubmit}
             disabled={!label.trim()}
             className="w-full py-3.5 rounded-2xl text-sm font-bold text-white transition-opacity"
             style={{ background: `linear-gradient(135deg, ${COACH_COLOR}, #1A9FAD)`, opacity: label.trim() ? 1 : 0.4 }}>
-            {repeat > 1 ? `Ajouter sur ${repeat} semaines →` : 'Ajouter à cette semaine →'}
+            {isEdit
+              ? 'Modifier la séance →'
+              : repeat > 1 ? `Ajouter sur ${repeat} semaines →` : 'Ajouter à cette semaine →'}
           </button>
         </div>
       </div>

@@ -64,6 +64,11 @@ export default function AthleteDetail() {
             style={{ background: 'var(--surface2)', color: 'var(--text2)', border: '1px solid var(--border)' }}>
             💬 Message
           </button>
+          <button onClick={() => navigate(`/athletes/${id}/plans`)}
+            className="px-4 py-2 rounded-xl text-sm font-semibold"
+            style={{ background: 'var(--surface2)', color: 'var(--text2)', border: '1px solid var(--border)' }}>
+            📋 Plans
+          </button>
           <button onClick={() => navigate(`/athletes/${id}/builder`)}
             className="px-4 py-2 rounded-xl text-sm font-semibold text-white"
             style={{ background: 'var(--red)' }}>
