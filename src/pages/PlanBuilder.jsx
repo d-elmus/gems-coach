@@ -234,10 +234,7 @@ export default function PlanBuilder() {
         actualTSS: 0,
       }))
 
-      // 1. Deactivate all athlete's existing plans
-      await supabase.from('plans').update({ is_active:false }).eq('user_id', id).select('id')
-
-      // 2. Create the new coach plan
+      // Create the new coach plan (athlete activates it themselves from their Goals tab)
       const { error } = await supabase.from('plans').insert({
         user_id: id,
         discipline: meta.discipline,
@@ -245,7 +242,7 @@ export default function PlanBuilder() {
         start_date: meta.startDate,
         goal_date: meta.goalDate || null,
         event_name: meta.eventName || meta.discipline,
-        is_active: true,
+        is_active: false,
         weeks: weeksWithDates,
         completed_sessions: {},
         pbs: athletePlan?.pbs || {},
@@ -376,7 +373,7 @@ export default function PlanBuilder() {
           <div>
             <h1 className="font-bold text-white">Construire le programme</h1>
             <p className="text-xs mt-0.5" style={{ color:'var(--text3)' }}>
-              {weeks.length} sem. · {totalSessions} séance{totalSessions!==1?'s':''} · remplace le plan actif de l'athlète
+              {weeks.length} sem. · {totalSessions} séance{totalSessions!==1?'s':''} · ajouté à la liste des plans de l'athlète
             </p>
           </div>
           <div className="flex gap-2">
