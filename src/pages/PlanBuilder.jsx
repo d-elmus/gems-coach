@@ -425,17 +425,21 @@ export default function PlanBuilder() {
     setError(null)
     setSaving(true)
 
-    // Include fields the mobile app reads to avoid crashes if plan is activated
     const sharedPayload = {
-      discipline:       meta.discipline,
-      level:            meta.level,
-      start_date:       meta.startDate,
-      goal_date:        meta.goalDate || null,
-      event_name:       meta.name || meta.discipline,
+      discipline:      meta.discipline,
+      level:           meta.level,
+      start_date:      meta.startDate,
+      goal_date:       meta.goalDate || null,
+      event_name:      meta.name || meta.discipline,
       weeks,
-      total_weeks:      weeks.length,
-      days_per_week:    parseInt(meta.daysPerWeek) || 5,
-      athlete_metrics:  { ...(athletePlan?.athlete_metrics || {}), coachId: coach?.id, description: meta.description || null },
+      // Store extra fields in athlete_metrics so mobile app can read them without extra columns
+      athlete_metrics: {
+        ...(athletePlan?.athlete_metrics || {}),
+        coachId:     coach?.id,
+        description: meta.description || null,
+        daysPerWeek: parseInt(meta.daysPerWeek) || 5,
+        totalWeeks:  weeks.length,
+      },
     }
 
     let err
