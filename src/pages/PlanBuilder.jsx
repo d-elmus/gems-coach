@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import SessionModal from '../components/SessionModal'
+import { stepsToTSS, stepsToMinutes, workoutSummary } from '../components/WorkoutBuilder'
 import {
   autoAssignPhases, weekTSSTarget, SPORT_META, ZONE_COLORS,
   DISCIPLINES, PHASES, PHASE_COLORS, LEVELS, DAYS_SHORT,
@@ -103,17 +104,19 @@ function SessionCard({ session: s, onRemove, onClick }) {
   const m = SPORT_META[s.sport] || SPORT_META.run
   const d = parseDate(s.date)
   const day = DAYS_SHORT[d.getDay() === 0 ? 6 : d.getDay() - 1]
+  const hasStructured = s.structuredWorkout?.steps?.length > 0
+  const summary = hasStructured ? workoutSummary(s.structuredWorkout.steps) : null
   return (
     <div className="rounded-2xl p-4 relative group cursor-pointer transition-all hover:opacity-90"
       onClick={onClick}
       style={{ background: 'var(--surface)', border: `1px solid ${COACH_COLOR}33` }}>
       <div className="flex items-start justify-between gap-2">
-        <div className="flex items-start gap-3">
+        <div className="flex items-start gap-3 min-w-0 flex-1">
           <div className="w-9 h-9 rounded-xl flex items-center justify-center text-base flex-shrink-0"
             style={{ background: m.color + '20' }}>
             {m.emoji}
           </div>
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5 flex-wrap">
               <span className="text-[10px] font-bold uppercase" style={{ color: COACH_COLOR }}>{day}</span>
               {s.zone && (
@@ -122,9 +125,10 @@ function SessionCard({ session: s, onRemove, onClick }) {
                   {s.zone}
                 </span>
               )}
-              {s.instructions && (
-                <span className="text-[9px] px-1 py-0.5 rounded" style={{ background: 'rgba(34,197,212,0.1)', color: COACH_COLOR }}>
-                  📋 instructions
+              {hasStructured && (
+                <span className="text-[9px] px-1.5 py-0.5 rounded font-bold"
+                  style={{ background: COACH_COLOR + '22', color: COACH_COLOR }}>
+                  ⚡ structuré
                 </span>
               )}
             </div>
@@ -134,6 +138,13 @@ function SessionCard({ session: s, onRemove, onClick }) {
               {s.distance != null && s.distance > 0 && <span>{s.distance}{m.distUnit}</span>}
               <span style={{ color: COACH_COLOR }}>TSS {s.tss}</span>
             </div>
+            {/* Structured workout summary */}
+            {summary && (
+              <p className="text-[10px] mt-1.5 leading-relaxed font-mono break-all"
+                style={{ color: 'var(--text3)' }}>
+                {summary}
+              </p>
+            )}
             {s.coachNote && <p className="text-xs mt-1 italic truncate" style={{ color: COACH_COLOR }}>"{s.coachNote}"</p>}
           </div>
         </div>
@@ -286,6 +297,9 @@ export default function PlanBuilder() {
   }
 
   function handleAddSessions(form) {
+    const zoneFactor = { Z1: 0.5, Z2: 0.8, Z3: 1.1, Z4: 1.4, Z5: 1.6 }
+    const sw = form.structuredWorkout
+
     // Edit mode: replace the existing session
     if (form.editId) {
       setWeeks(prev => prev.map((wk, i) => {
@@ -294,14 +308,16 @@ export default function PlanBuilder() {
         const sessionDate = new Date(weekStartDate)
         sessionDate.setDate(weekStartDate.getDate() + parseInt(form.dayOfWeek))
         const dateStr = sessionDate.toISOString().slice(0,10)
-        const tss = Math.round(form.duration * (form.zone === 'Z1' ? 0.5 : form.zone === 'Z2' ? 0.8 : form.zone === 'Z3' ? 1.1 : form.zone === 'Z4' ? 1.4 : 1.6))
+        const dur = sw ? stepsToMinutes(sw.steps) : form.duration
+        const tss = sw ? stepsToTSS(sw.steps) : Math.round(dur * (zoneFactor[form.zone] ?? 0.8))
         const updated = {
           ...editingSession.session,
           sport: form.sport, label: form.label, date: dateStr,
-          duration: form.duration, distance: form.distance,
+          duration: dur, distance: form.distance,
           zone: form.zone, tss,
           coachNote: form.note || undefined,
           instructions: form.instructions || undefined,
+          structuredWorkout: sw || undefined,
         }
         const sessions = wk.sessions.map(s => s.id === form.editId ? updated : s)
           .sort((a,b) => String(a.date).localeCompare(String(b.date)))
@@ -333,8 +349,10 @@ export default function PlanBuilder() {
         const sessionDate = new Date(weekStartDate)
         sessionDate.setDate(weekStartDate.getDate() + parseInt(form.dayOfWeek))
         const dateStr = sessionDate.toISOString().slice(0,10)
-        const durationAdj = wk.isRecovery && form.skipRecovery ? Math.round(form.duration * 0.7) : form.duration
-        const tss = Math.round(durationAdj * (form.zone === 'Z1' ? 0.5 : form.zone === 'Z2' ? 0.8 : form.zone === 'Z3' ? 1.1 : form.zone === 'Z4' ? 1.4 : 1.6))
+        const baseDur = sw ? stepsToMinutes(sw.steps) : form.duration
+        const durationAdj = wk.isRecovery && form.skipRecovery ? Math.round(baseDur * 0.7) : baseDur
+        const tss = sw ? Math.round(stepsToTSS(sw.steps) * (wk.isRecovery && form.skipRecovery ? 0.7 : 1))
+          : Math.round(durationAdj * (zoneFactor[form.zone] ?? 0.8))
         const newSession = {
           id: `coach-${Date.now()}-${w}-${Math.random().toString(36).slice(2,6)}`,
           sport: form.sport, label: form.label, date: dateStr,
@@ -343,6 +361,7 @@ export default function PlanBuilder() {
           color: COACH_COLOR, coachAdded: true,
           coachNote: form.note || undefined,
           instructions: form.instructions || undefined,
+          structuredWorkout: sw || undefined,
           done: false,
         }
         updated = updated.map((wk2, i) => {

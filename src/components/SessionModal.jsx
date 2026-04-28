@@ -1,8 +1,11 @@
 import { useState, useEffect } from 'react'
 import {
-  SPORT_META, SESSION_PRESETS, ZONE_COLORS, DAYS_SHORT, PHASES,
+  SPORT_META, SESSION_PRESETS, ZONE_COLORS, DAYS_SHORT,
   getZoneTargets,
 } from '../lib/planHelpers'
+import WorkoutBuilder, {
+  newStep, newRepeat, stepsToMinutes, stepsToTSS,
+} from './WorkoutBuilder'
 
 const ZONES = ['Z1','Z2','Z3','Z4','Z5']
 const COACH_COLOR = '#22C5D5'
@@ -22,6 +25,12 @@ export default function SessionModal({ weekStart, weekIdx, totalWeeks, athletePl
   const [repeat, setRepeat]       = useState(1)
   const [skipRecovery, setSkipRecovery] = useState(true)
 
+  // Structured workout
+  const [workoutMode, setWorkoutMode] = useState('simple') // 'simple' | 'structured'
+  const [workoutSteps, setWorkoutSteps] = useState([])
+
+  const zoneTarget = getZoneTargets(athletePlan, sport, zone)
+
   // Populate fields when editing an existing session
   useEffect(() => {
     if (!editSession) return
@@ -32,15 +41,31 @@ export default function SessionModal({ weekStart, weekIdx, totalWeeks, athletePl
     setZone(editSession.zone || 'Z2')
     setNote(editSession.coachNote || '')
     setInstructions(editSession.instructions || '')
-    // Compute day-of-week from date string relative to weekStart
+    if (editSession.structuredWorkout?.steps?.length) {
+      setWorkoutMode('structured')
+      setWorkoutSteps(editSession.structuredWorkout.steps)
+    }
     if (editSession.date && weekStart) {
       const d = new Date(editSession.date + 'T12:00:00')
-      const jsDay = d.getDay() // 0=Sun, 1=Mon...
+      const jsDay = d.getDay()
       setDayOfWeek(jsDay === 0 ? 6 : jsDay - 1)
     }
   }, [editSession])
 
-  const zoneTarget = getZoneTargets(athletePlan, sport, zone)
+  // When workout steps change in structured mode, sync duration
+  useEffect(() => {
+    if (workoutMode === 'structured' && workoutSteps.length > 0) {
+      const mins = stepsToMinutes(workoutSteps)
+      if (mins > 0) setDuration(mins)
+    }
+  }, [workoutSteps, workoutMode])
+
+  function switchToStructured() {
+    setWorkoutMode('structured')
+    if (workoutSteps.length === 0) {
+      setWorkoutSteps([newStep('warmup'), newRepeat(), newStep('cooldown')])
+    }
+  }
 
   function applyPreset(p) {
     setPreset(p)
@@ -54,23 +79,31 @@ export default function SessionModal({ weekStart, weekIdx, totalWeeks, athletePl
   const sportM  = SPORT_META[sport]
   const maxRepeat = Math.max(1, totalWeeks - weekIdx)
 
+  const computedDuration = workoutMode === 'structured' && workoutSteps.length > 0
+    ? stepsToMinutes(workoutSteps)
+    : parseInt(duration) || 0
+
   function handleSubmit() {
+    const sw = workoutMode === 'structured' && workoutSteps.length > 0
+      ? { steps: workoutSteps }
+      : null
     onAdd({
       sport, label, dayOfWeek,
-      duration: parseInt(duration),
+      duration: computedDuration || parseInt(duration),
       distance: distance !== '' ? parseFloat(distance) : null,
       zone, note, instructions,
       repeat: isEdit ? 1 : repeat,
       skipRecovery,
       editId: isEdit ? editSession.id : undefined,
+      structuredWorkout: sw,
     })
   }
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
-      style={{ background: 'rgba(0,0,0,0.8)' }} onClick={onClose}>
-      <div className="w-full sm:max-w-lg rounded-t-3xl sm:rounded-2xl overflow-y-auto"
-        style={{ background: 'var(--surface)', maxHeight: '90vh' }} onClick={e => e.stopPropagation()}>
+      style={{ background: 'rgba(0,0,0,0.85)' }} onClick={onClose}>
+      <div className="w-full sm:max-w-2xl rounded-t-3xl sm:rounded-2xl overflow-y-auto"
+        style={{ background: 'var(--surface)', maxHeight: '92vh' }} onClick={e => e.stopPropagation()}>
 
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b sticky top-0 z-10"
@@ -83,6 +116,7 @@ export default function SessionModal({ weekStart, weekIdx, totalWeeks, athletePl
         </div>
 
         <div className="px-6 py-5 flex flex-col gap-5">
+
           {/* Sport selector */}
           <div>
             <label className="text-[10px] font-bold uppercase tracking-widest mb-2 block" style={{ color: 'var(--text3)' }}>Sport</label>
@@ -105,7 +139,7 @@ export default function SessionModal({ weekStart, weekIdx, totalWeeks, athletePl
           {presets.length > 0 && (
             <div>
               <label className="text-[10px] font-bold uppercase tracking-widest mb-2 block" style={{ color: 'var(--text3)' }}>
-                Modèle rapide <span style={{ color: 'var(--text3)', fontWeight: 400 }}>(optionnel)</span>
+                Modèle rapide <span style={{ fontWeight: 400 }}>(optionnel)</span>
               </label>
               <div className="flex gap-1.5 flex-wrap">
                 {presets.map((p, i) => (
@@ -146,10 +180,22 @@ export default function SessionModal({ weekStart, weekIdx, totalWeeks, athletePl
               </div>
             </div>
             <div>
-              <label className="text-[10px] font-bold uppercase tracking-widest mb-1.5 block" style={{ color: 'var(--text3)' }}>Durée (min)</label>
-              <input type="number" value={duration} onChange={e => setDuration(e.target.value)} min={10} max={480}
+              <label className="text-[10px] font-bold uppercase tracking-widest mb-1.5 block" style={{ color: 'var(--text3)' }}>
+                Durée (min)
+                {workoutMode === 'structured' && workoutSteps.length > 0 && (
+                  <span className="ml-1 normal-case font-normal" style={{ color: COACH_COLOR }}>calculée ✓</span>
+                )}
+              </label>
+              <input type="number" value={workoutMode === 'structured' ? computedDuration : duration}
+                onChange={e => setDuration(e.target.value)}
+                readOnly={workoutMode === 'structured' && workoutSteps.length > 0}
+                min={10} max={480}
                 className="w-full px-3 py-2.5 rounded-xl text-sm text-white outline-none"
-                style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }} />
+                style={{
+                  background: 'var(--surface2)',
+                  border: `1px solid ${workoutMode === 'structured' ? COACH_COLOR + '55' : 'var(--border)'}`,
+                  opacity: workoutMode === 'structured' ? 0.7 : 1,
+                }} />
             </div>
             <div>
               <label className="text-[10px] font-bold uppercase tracking-widest mb-1.5 block" style={{ color: 'var(--text3)' }}>
@@ -162,9 +208,12 @@ export default function SessionModal({ weekStart, weekIdx, totalWeeks, athletePl
             </div>
           </div>
 
-          {/* Zone cible */}
+          {/* Zone cible globale */}
           <div>
-            <label className="text-[10px] font-bold uppercase tracking-widest mb-2 block" style={{ color: 'var(--text3)' }}>Zone cible</label>
+            <label className="text-[10px] font-bold uppercase tracking-widest mb-2 block" style={{ color: 'var(--text3)' }}>
+              Zone dominante
+              {workoutMode === 'structured' && <span className="ml-1 normal-case font-normal" style={{ color: 'var(--text3)' }}>(utilisée pour le TSS si mode simple)</span>}
+            </label>
             <div className="flex gap-2 mb-2">
               {ZONES.map(z => (
                 <button key={z} onClick={() => setZone(z)}
@@ -188,21 +237,63 @@ export default function SessionModal({ weekStart, weekIdx, totalWeeks, athletePl
             )}
           </div>
 
-          {/* Instructions */}
+          {/* ── Mode toggle: Simple / Structuré ── */}
           <div>
-            <label className="text-[10px] font-bold uppercase tracking-widest mb-1.5 block" style={{ color: 'var(--text3)' }}>
-              Instructions de la séance <span style={{ color: 'var(--text3)', fontWeight:400 }}>(visible par l'athlète)</span>
-            </label>
-            <textarea value={instructions} onChange={e => setInstructions(e.target.value)}
-              placeholder="Ex: Échauffement 10 min Z1 · 5×1000m @Z4 récup 2min · Retour au calme 10 min Z1"
-              rows={3} className="w-full px-4 py-2.5 rounded-xl text-sm text-white outline-none resize-none"
-              style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }} />
+            <div className="flex items-center justify-between mb-3">
+              <label className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--text3)' }}>
+                Contenu de la séance
+              </label>
+              <div className="flex rounded-xl overflow-hidden" style={{ border: '1px solid var(--border)' }}>
+                <button onClick={() => setWorkoutMode('simple')}
+                  className="px-3 py-1.5 text-xs font-semibold transition-all"
+                  style={{
+                    background: workoutMode === 'simple' ? 'var(--surface2)' : 'transparent',
+                    color: workoutMode === 'simple' ? 'var(--text2)' : 'var(--text3)',
+                  }}>
+                  ✏️ Texte libre
+                </button>
+                <button onClick={switchToStructured}
+                  className="px-3 py-1.5 text-xs font-semibold transition-all"
+                  style={{
+                    background: workoutMode === 'structured' ? COACH_COLOR + '22' : 'transparent',
+                    color: workoutMode === 'structured' ? COACH_COLOR : 'var(--text3)',
+                    borderLeft: '1px solid var(--border)',
+                  }}>
+                  ⚡ Structuré
+                </button>
+              </div>
+            </div>
+
+            {/* Simple mode: instructions textarea */}
+            {workoutMode === 'simple' && (
+              <textarea value={instructions} onChange={e => setInstructions(e.target.value)}
+                placeholder="Ex: Échauffement 10 min Z1 · 5×1000m @Z4 récup 2min · Retour au calme 10 min Z1"
+                rows={4} className="w-full px-4 py-2.5 rounded-xl text-sm text-white outline-none resize-none"
+                style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }} />
+            )}
+
+            {/* Structured mode: WorkoutBuilder */}
+            {workoutMode === 'structured' && (
+              <div className="rounded-xl p-4" style={{ background: 'var(--surface2)', border: `1px solid ${COACH_COLOR}33` }}>
+                <WorkoutBuilder value={workoutSteps} onChange={setWorkoutSteps} sport={sport} />
+                {/* Optional extra instructions */}
+                <div className="mt-4 pt-4 border-t" style={{ borderColor: 'var(--border)' }}>
+                  <label className="text-[10px] font-bold uppercase tracking-widest mb-1.5 block" style={{ color: 'var(--text3)' }}>
+                    Instructions complémentaires <span style={{ fontWeight: 400 }}>(optionnel)</span>
+                  </label>
+                  <textarea value={instructions} onChange={e => setInstructions(e.target.value)}
+                    placeholder="Consignes supplémentaires, points d'attention..."
+                    rows={2} className="w-full px-3 py-2 rounded-xl text-xs text-white outline-none resize-none"
+                    style={{ background: 'var(--surface)', border: '1px solid var(--border)' }} />
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Note coach */}
           <div>
             <label className="text-[10px] font-bold uppercase tracking-widest mb-1.5 block" style={{ color: 'var(--text3)' }}>
-              Note coach privée <span style={{ color: 'var(--text3)', fontWeight:400 }}>(s'affiche sur la carte)</span>
+              Note coach privée <span style={{ fontWeight: 400 }}>(s'affiche sur la carte)</span>
             </label>
             <textarea value={note} onChange={e => setNote(e.target.value)}
               placeholder="Conseils techniques, focus de la séance..."
@@ -225,7 +316,7 @@ export default function SessionModal({ weekStart, weekIdx, totalWeeks, athletePl
               <div className="flex justify-between text-[10px]" style={{ color: 'var(--text3)' }}>
                 <span>1 sem.</span>
                 <span>{Math.ceil(maxRepeat / 2)} sem.</span>
-                <span>{maxRepeat} sem. (fin du plan)</span>
+                <span>{maxRepeat} sem.</span>
               </div>
               {repeat > 1 && (
                 <label className="flex items-center gap-2 mt-3 cursor-pointer">
