@@ -381,8 +381,7 @@ export default function PlanBuilder() {
       performance_factor: { run:1, bike:1 },
       athlete_grades:   athletePlan?.athlete_grades || {},
       scores:           athletePlan?.scores || {},
-      athlete_metrics:  { ...(athletePlan?.athlete_metrics || {}), coachId: coach?.id },
-      description:      meta.description || null,
+      athlete_metrics:  { ...(athletePlan?.athlete_metrics || {}), coachId: coach?.id, description: meta.description || null },
     }).select('id')
     setSaving(false)
     if (err) { setError('Erreur : ' + err.message); return }
