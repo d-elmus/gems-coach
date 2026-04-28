@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import SessionModal from '../components/SessionModal'
@@ -161,14 +161,18 @@ export default function PlanBuilder() {
   const { id } = useParams()
   const navigate = useNavigate()
   const { coach } = useAuth()
+  const [searchParams] = useSearchParams()
+  const planId = searchParams.get('planId') // null = create mode, string = edit mode
 
   const [athlete, setAthlete]         = useState(null)
   const [athletePlan, setAthletePlan] = useState(null)
+  const [editingPlanId, setEditingPlanId] = useState(null)
   const [loading, setLoading]         = useState(true)
   const [saving, setSaving]           = useState(false)
+  const [saved, setSaved]             = useState(false)
   const [error, setError]             = useState(null)
   const [showModal, setShowModal]     = useState(false)
-  const [editingSession, setEditingSession] = useState(null) // { weekIdx, session }
+  const [editingSession, setEditingSession] = useState(null)
   const [selectedWeek, setSelectedWeek] = useState(0)
   const [weeks, setWeeks]             = useState([])
 
@@ -190,29 +194,54 @@ export default function PlanBuilder() {
     return Math.max(1, diff)
   }, [meta.startDate, meta.goalDate, weeks.length])
 
-  useEffect(() => { fetchData() }, [id])
+  useEffect(() => { fetchData() }, [id, planId])
 
   async function fetchData() {
-    const [{ data: profile }, { data: planData }] = await Promise.all([
-      supabase.from('profiles').select('*').eq('id', id).single(),
-      supabase.from('plans').select('*').eq('user_id', id).eq('is_active', true).single(),
-    ])
+    const { data: profile } = await supabase.from('profiles').select('*').eq('id', id).single()
     setAthlete(profile)
-    setAthletePlan(planData)
-    if (planData) {
-      setMeta(m => ({
-        ...m,
-        discipline: planData.discipline || m.discipline,
-        level:      planData.level      || m.level,
-        goalDate:   planData.goal_date  || '',
-        name:       planData.event_name || '',
-      }))
+
+    if (planId) {
+      // ── Edit mode: load the specific plan ──
+      const { data: existing } = await supabase.from('plans').select('*').eq('id', planId).single()
+      if (existing) {
+        setEditingPlanId(planId)
+        setAthletePlan(existing)
+        setMeta({
+          name:         existing.event_name  || '',
+          discipline:   existing.discipline  || 'halfIronman',
+          level:        existing.level       || 'intermediate',
+          startDate:    existing.start_date  || nextMonday(),
+          goalDate:     existing.goal_date   || '',
+          daysPerWeek:  5,
+          recoveryFreq: 4,
+          description:  existing.athlete_metrics?.description || '',
+        })
+        setWeeks(existing.weeks || [])
+        if (existing.weeks?.length > 0) setSelectedWeek(0)
+      }
+    } else {
+      // ── Create mode: load active plan for reference data ──
+      const { data: planData } = await supabase.from('plans').select('*').eq('user_id', id).eq('is_active', true).single()
+      setAthletePlan(planData)
+      if (planData) {
+        setMeta(m => ({
+          ...m,
+          discipline: planData.discipline || m.discipline,
+          level:      planData.level      || m.level,
+          goalDate:   planData.goal_date  || '',
+          name:       planData.event_name || '',
+        }))
+      }
     }
     setLoading(false)
   }
 
   function generateWeeks() {
     if (!meta.startDate) return
+    const hasExisting = weeks.some(w => w.sessions?.length > 0)
+    if (editingPlanId && hasExisting) {
+      if (!window.confirm('Régénérer les semaines effacera toutes les séances existantes. Continuer ?')) return
+    }
     const n = totalWeeks || 12
     const phases = autoAssignPhases(n, parseInt(meta.recoveryFreq))
     setWeeks(Array.from({ length: n }, (_, i) => {
@@ -378,33 +407,47 @@ export default function PlanBuilder() {
   async function savePlan() {
     if (!meta.startDate) { setError('Définis une date de début.'); return }
     const totalS = weeks.reduce((acc,w)=>acc+w.sessions.length,0)
-    if (totalS === 0) { setError('Ajoute au moins une séance avant de publier.'); return }
+    if (totalS === 0) { setError('Ajoute au moins une séance avant de sauvegarder.'); return }
     setError(null)
     setSaving(true)
-    const { error: err } = await supabase.from('plans').insert({
-      user_id:     id,
-      discipline:  meta.discipline,
-      level:       meta.level,
-      start_date:  meta.startDate,
-      goal_date:   meta.goalDate || null,
-      event_name:  meta.name || meta.discipline,
-      is_active:   false,
+
+    const sharedPayload = {
+      discipline:      meta.discipline,
+      level:           meta.level,
+      start_date:      meta.startDate,
+      goal_date:       meta.goalDate || null,
+      event_name:      meta.name || meta.discipline,
       weeks,
-      completed_sessions: {},
-      pbs:              athletePlan?.pbs || {},
-      zones:            athletePlan?.zones || {},
-      equipment:        athletePlan?.equipment || {},
-      age:              athlete?.age || null,
-      hrmax:            athletePlan?.hrmax || null,
-      skill_levels:     {},
-      performance_factor: { run:1, bike:1 },
-      athlete_grades:   athletePlan?.athlete_grades || {},
-      scores:           athletePlan?.scores || {},
-      athlete_metrics:  { ...(athletePlan?.athlete_metrics || {}), coachId: coach?.id, description: meta.description || null },
-    }).select('id')
+      athlete_metrics: { ...(athletePlan?.athlete_metrics || {}), coachId: coach?.id, description: meta.description || null },
+    }
+
+    let err
+    if (editingPlanId) {
+      const res = await supabase.from('plans').update(sharedPayload).eq('id', editingPlanId).select('id')
+      err = res.error
+    } else {
+      const res = await supabase.from('plans').insert({
+        ...sharedPayload,
+        user_id:            id,
+        is_active:          false,
+        completed_sessions: {},
+        pbs:                athletePlan?.pbs || {},
+        zones:              athletePlan?.zones || {},
+        equipment:          athletePlan?.equipment || {},
+        age:                athlete?.age || null,
+        hrmax:              athletePlan?.hrmax || null,
+        skill_levels:       {},
+        performance_factor: { run:1, bike:1 },
+        athlete_grades:     athletePlan?.athlete_grades || {},
+        scores:             athletePlan?.scores || {},
+      }).select('id')
+      err = res.error
+    }
+
     setSaving(false)
     if (err) { setError('Erreur : ' + err.message); return }
-    navigate(`/athletes/${id}/plans`)
+    setSaved(true)
+    setTimeout(() => { setSaved(false); navigate(`/athletes/${id}`) }, 1200)
   }
 
   if (loading) return (
@@ -597,12 +640,21 @@ export default function PlanBuilder() {
         <div className="flex items-center justify-between px-6 py-3.5 border-b flex-shrink-0"
           style={{ borderColor:'var(--border)', background:'var(--surface)' }}>
           <div>
-            <h1 className="font-bold text-white text-lg">{meta.name || 'Nouveau programme'}</h1>
+            <div className="flex items-center gap-2">
+              <h1 className="font-bold text-white text-lg">{meta.name || (editingPlanId ? 'Modifier le programme' : 'Nouveau programme')}</h1>
+              {editingPlanId && <span className="text-xs px-2 py-0.5 rounded-full font-bold" style={{ background: `${COACH_COLOR}22`, color: COACH_COLOR }}>Mode édition</span>}
+            </div>
             <p className="text-xs mt-0.5" style={{ color:'var(--text3)' }}>
-              {weeks.length} sem. · {totalSessions} séance{totalSessions!==1?'s':''} · publié comme plan inactif
+              {weeks.length} sem. · {totalSessions} séance{totalSessions!==1?'s':''}
+              {!editingPlanId && ' · sera publié comme plan inactif'}
             </p>
           </div>
           <div className="flex gap-2 items-center">
+            {saved && (
+              <span className="text-xs px-3 py-1.5 rounded-xl font-semibold" style={{ background:'rgba(74,222,128,0.1)', color:'#4ade80' }}>
+                ✓ Sauvegardé
+              </span>
+            )}
             {error && (
               <span className="text-xs px-3 py-1.5 rounded-xl" style={{ background:'rgba(239,68,68,0.1)', color:'#f87171' }}>
                 {error}
@@ -621,7 +673,7 @@ export default function PlanBuilder() {
             <button onClick={savePlan} disabled={saving}
               className="px-5 py-2 rounded-xl text-sm font-bold text-white"
               style={{ background:'var(--red)', opacity:saving?0.6:1 }}>
-              {saving ? 'Publication...' : '📤 Publier le plan'}
+              {saving ? 'Sauvegarde...' : editingPlanId ? '💾 Sauvegarder' : '📤 Publier le plan'}
             </button>
           </div>
         </div>

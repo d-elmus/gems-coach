@@ -3,12 +3,19 @@ import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 
+const COACH_COLOR = '#22C5D5'
+
+function parseDate(str) {
+  return str ? new Date(str + 'T12:00:00') : null
+}
+
 export default function Dashboard() {
   const { coach } = useAuth()
   const navigate = useNavigate()
   const [athletes, setAthletes] = useState([])
-  const [pending, setPending] = useState([])
-  const [loading, setLoading] = useState(true)
+  const [pending, setPending]   = useState([])
+  const [planMap, setPlanMap]   = useState({}) // athleteId → plan metadata
+  const [loading, setLoading]   = useState(true)
 
   useEffect(() => {
     if (coach?.id) fetchAll()
@@ -20,9 +27,33 @@ export default function Dashboard() {
       .select(`id, status, started_at, athlete:athlete_id ( id, full_name, email, photo_url )`)
       .eq('coach_id', coach.id)
       .in('status', ['active', 'pending'])
+
     const all = data || []
-    setAthletes(all.filter(r => r.status === 'active'))
-    setPending(all.filter(r => r.status === 'pending'))
+    const activeAthletes = all.filter(r => r.status === 'active')
+    const pendingAthletes = all.filter(r => r.status === 'pending')
+    setAthletes(activeAthletes)
+    setPending(pendingAthletes)
+
+    // Load plan metadata for all active athletes in one query
+    if (activeAthletes.length > 0) {
+      const ids = activeAthletes.map(r => r.athlete.id)
+      const { data: plansData } = await supabase
+        .from('plans')
+        .select('id,user_id,event_name,discipline,is_active,start_date,goal_date,athlete_metrics,weeks')
+        .in('user_id', ids)
+        .order('created_at', { ascending: false })
+
+      // For each athlete, find their coach plan
+      const map = {}
+      ;(plansData || []).forEach(plan => {
+        const uid = plan.user_id
+        if (!map[uid] && plan.athlete_metrics?.coachId === coach.id) {
+          map[uid] = plan
+        }
+      })
+      setPlanMap(map)
+    }
+
     setLoading(false)
   }
 
@@ -50,31 +81,27 @@ export default function Dashboard() {
           </div>
           <div className="flex flex-col gap-3">
             {pending.map(({ id, athlete }) => (
-              <div key={id} className="rounded-2xl p-4 flex items-center gap-4" style={{ background: 'var(--surface)', border: '1px solid rgba(147,22,33,0.3)' }}>
-                {athlete.photo_url ? (
-                  <img src={athlete.photo_url} alt="" className="w-11 h-11 rounded-full object-cover flex-shrink-0" />
-                ) : (
-                  <div className="w-11 h-11 rounded-full flex items-center justify-center font-bold text-white flex-shrink-0" style={{ background: 'var(--red)' }}>
-                    {athlete.full_name?.[0]?.toUpperCase()}
-                  </div>
-                )}
+              <div key={id} className="rounded-2xl p-4 flex items-center gap-4"
+                style={{ background: 'var(--surface)', border: '1px solid rgba(147,22,33,0.3)' }}>
+                {athlete.photo_url
+                  ? <img src={athlete.photo_url} alt="" className="w-11 h-11 rounded-full object-cover flex-shrink-0" />
+                  : <div className="w-11 h-11 rounded-full flex items-center justify-center font-bold text-white flex-shrink-0" style={{ background: 'var(--red)' }}>
+                      {athlete.full_name?.[0]?.toUpperCase()}
+                    </div>
+                }
                 <div className="flex-1 min-w-0">
                   <p className="font-semibold text-white text-sm">{athlete.full_name}</p>
                   <p className="text-xs" style={{ color: 'var(--text3)' }}>{athlete.email}</p>
                 </div>
                 <div className="flex gap-2 flex-shrink-0">
-                  <button
-                    onClick={() => decline(id)}
-                    className="px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors"
-                    style={{ background: 'rgba(255,255,255,0.06)', color: 'var(--text3)' }}
-                  >
+                  <button onClick={() => decline(id)}
+                    className="px-3 py-1.5 rounded-lg text-xs font-semibold"
+                    style={{ background: 'rgba(255,255,255,0.06)', color: 'var(--text3)' }}>
                     Refuser
                   </button>
-                  <button
-                    onClick={() => accept(id)}
-                    className="px-3 py-1.5 rounded-lg text-xs font-semibold text-white transition-colors"
-                    style={{ background: 'var(--red)' }}
-                  >
+                  <button onClick={() => accept(id)}
+                    className="px-3 py-1.5 rounded-lg text-xs font-semibold text-white"
+                    style={{ background: 'var(--red)' }}>
                     Accepter ✓
                   </button>
                 </div>
@@ -108,36 +135,78 @@ export default function Dashboard() {
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {athletes.map(({ id, athlete, started_at }) => (
-            <button
-              key={id}
-              onClick={() => navigate(`/athletes/${athlete.id}`)}
-              className="rounded-2xl p-5 text-left transition-all hover:scale-[1.02]"
-              style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}
-            >
-              <div className="flex items-center gap-3 mb-4">
-                {athlete.photo_url ? (
-                  <img src={athlete.photo_url} alt="" className="w-11 h-11 rounded-full object-cover" />
+          {athletes.map(({ id: relId, athlete, started_at }) => {
+            const plan = planMap[athlete.id]
+            const hasPlan = !!plan
+            const totalSessions = hasPlan ? (plan.weeks || []).reduce((a, w) => a + (w.sessions?.length || 0), 0) : 0
+            const daysToGoal = plan?.goal_date
+              ? Math.max(0, Math.round((parseDate(plan.goal_date) - new Date()) / 86400000))
+              : null
+
+            return (
+              <div key={relId}
+                onClick={() => navigate(`/athletes/${athlete.id}`)}
+                className="rounded-2xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] hover:shadow-lg"
+                style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+
+                {/* Athlete info */}
+                <div className="flex items-center gap-3 p-5 pb-4">
+                  {athlete.photo_url
+                    ? <img src={athlete.photo_url} alt="" className="w-11 h-11 rounded-full object-cover flex-shrink-0" />
+                    : <div className="w-11 h-11 rounded-full flex items-center justify-center text-lg font-bold text-white flex-shrink-0" style={{ background: 'var(--red)' }}>
+                        {athlete.full_name?.[0]?.toUpperCase() || '?'}
+                      </div>
+                  }
+                  <div className="flex-1 min-w-0">
+                    <p className="font-semibold text-white truncate">{athlete.full_name}</p>
+                    <p className="text-xs truncate" style={{ color: 'var(--text3)' }}>{athlete.email}</p>
+                  </div>
+                  {daysToGoal !== null && (
+                    <div className="text-right flex-shrink-0">
+                      <p className="text-lg font-bold" style={{ color: COACH_COLOR }}>J-{daysToGoal}</p>
+                      <p className="text-[9px]" style={{ color: 'var(--text3)' }}>objectif</p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Plan status */}
+                {hasPlan ? (
+                  <div className="px-5 pb-4">
+                    <div className="rounded-xl p-3" style={{ background: `${COACH_COLOR}08`, border: `1px solid ${COACH_COLOR}22` }}>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="text-xs font-semibold text-white truncate">{plan.event_name || plan.discipline}</span>
+                        <span className="text-xs flex-shrink-0 ml-2 px-1.5 py-0.5 rounded font-bold"
+                          style={{ background: plan.is_active ? 'rgba(74,222,128,0.1)' : 'rgba(250,204,21,0.08)', color: plan.is_active ? '#4ade80' : '#facc15' }}>
+                          {plan.is_active ? '● Actif' : '○ Inactif'}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-3 text-xs" style={{ color: 'var(--text3)' }}>
+                        <span>{(plan.weeks || []).length} sem.</span>
+                        <span>{totalSessions} séances</span>
+                        {plan.start_date && <span>→ {parseDate(plan.start_date).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}</span>}
+                      </div>
+                    </div>
+                  </div>
                 ) : (
-                  <div className="w-11 h-11 rounded-full flex items-center justify-center text-lg font-bold text-white" style={{ background: 'var(--red)' }}>
-                    {athlete.full_name?.[0]?.toUpperCase() || '?'}
+                  <div className="px-5 pb-4">
+                    <button
+                      onClick={e => { e.stopPropagation(); navigate(`/athletes/${athlete.id}/builder`) }}
+                      className="w-full py-2 rounded-xl text-xs font-semibold transition-all"
+                      style={{ border: `1px dashed ${COACH_COLOR}44`, color: COACH_COLOR }}>
+                      + Créer un programme
+                    </button>
                   </div>
                 )}
-                <div>
-                  <p className="font-semibold text-white">{athlete.full_name}</p>
-                  <p className="text-xs" style={{ color: 'var(--text3)' }}>{athlete.email}</p>
+
+                <div className="px-5 pb-4 flex items-center justify-between">
+                  <span className="text-xs px-2 py-1 rounded-full font-medium" style={{ background: 'rgba(34,197,212,0.08)', color: COACH_COLOR }}>
+                    Coach depuis {new Date(started_at).toLocaleDateString('fr-FR', { month: 'short', year: 'numeric' })}
+                  </span>
+                  <span className="text-xs font-semibold" style={{ color: 'var(--text3)' }}>Voir →</span>
                 </div>
               </div>
-              <div className="flex items-center justify-between">
-                <span className="text-xs px-2 py-1 rounded-full font-medium" style={{ background: 'rgba(34,197,212,0.1)', color: 'var(--cyan)' }}>
-                  Actif
-                </span>
-                <span className="text-xs" style={{ color: 'var(--text3)' }}>
-                  Depuis {new Date(started_at).toLocaleDateString('fr-FR', { month: 'short', year: 'numeric' })}
-                </span>
-              </div>
-            </button>
-          ))}
+            )
+          })}
         </div>
       )}
     </div>

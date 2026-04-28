@@ -153,6 +153,13 @@ export default function AthleteDetailPlans() {
 
                   {/* Actions */}
                   <div className="flex flex-col gap-2 flex-shrink-0">
+                    {isCoachPlan && (
+                      <button onClick={() => navigate(`/athletes/${id}/builder?planId=${plan.id}`)}
+                        className="px-3 py-1.5 rounded-xl text-xs font-semibold"
+                        style={{ background: `${COACH_COLOR}22`, color: COACH_COLOR, border: `1px solid ${COACH_COLOR}44` }}>
+                        ✏️ Modifier
+                      </button>
+                    )}
                     <button onClick={() => deletePlan(plan)}
                       disabled={deleting === plan.id}
                       className="px-3 py-1.5 rounded-xl text-xs font-semibold transition-opacity"
