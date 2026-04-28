@@ -10,37 +10,43 @@ function MessageToasts() {
   const { toasts, dismissToast } = useNotifications()
   const navigate = useNavigate()
 
-  if (!toasts.length) return null
-
   return (
-    <div className="fixed top-4 right-4 z-50 flex flex-col gap-2" style={{ maxWidth: 320 }}>
+    <div className="fixed top-4 right-4 flex flex-col gap-2 pointer-events-none" style={{ zIndex: 99999, maxWidth: 340 }}>
       {toasts.map(toast => (
         <div
           key={toast.id}
           onClick={() => { navigate(`/messages/${toast.senderId}`); dismissToast(toast.id) }}
-          className="flex items-center gap-3 px-4 py-3 rounded-2xl cursor-pointer shadow-2xl transition-all hover:scale-[1.02]"
-          style={{ background: 'var(--surface)', border: `1px solid ${COACH_COLOR}55`, boxShadow: `0 8px 32px rgba(0,0,0,0.4), 0 0 0 1px ${COACH_COLOR}22` }}
+          className="flex items-center gap-3 px-4 py-3.5 rounded-2xl cursor-pointer pointer-events-auto"
+          style={{
+            background: 'var(--surface)',
+            border: `1px solid ${COACH_COLOR}66`,
+            boxShadow: `0 12px 40px rgba(0,0,0,0.5), 0 0 0 1px ${COACH_COLOR}22`,
+            animation: 'slideInRight 0.25s cubic-bezier(0.34,1.56,0.64,1)',
+          }}
         >
           {/* Sender avatar */}
-          {toast.senderPhoto
-            ? <img src={toast.senderPhoto} alt="" className="w-9 h-9 rounded-full object-cover flex-shrink-0" />
-            : <div className="w-9 h-9 rounded-full flex items-center justify-center font-bold text-white text-sm flex-shrink-0"
-                style={{ background: 'var(--red)' }}>
-                {toast.senderName?.[0]?.toUpperCase()}
-              </div>
-          }
+          <div className="relative flex-shrink-0">
+            {toast.senderPhoto
+              ? <img src={toast.senderPhoto} alt="" className="w-10 h-10 rounded-full object-cover" />
+              : <div className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white"
+                  style={{ background: 'var(--red)' }}>
+                  {toast.senderName?.[0]?.toUpperCase()}
+                </div>
+            }
+            <div className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full border-2 flex items-center justify-center"
+              style={{ background: COACH_COLOR, borderColor: 'var(--surface)' }}>
+              <span style={{ fontSize: 7, color: '#fff', lineHeight: 1 }}>💬</span>
+            </div>
+          </div>
           {/* Content */}
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-1.5 mb-0.5">
-              <div className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: COACH_COLOR }} />
-              <p className="text-xs font-bold text-white truncate">{toast.senderName}</p>
-            </div>
-            <p className="text-xs truncate" style={{ color: 'var(--text3)' }}>{toast.content}</p>
+            <p className="text-xs font-bold text-white mb-0.5">{toast.senderName}</p>
+            <p className="text-xs leading-snug" style={{ color: 'var(--text3)' }}>{toast.content}</p>
           </div>
           {/* Dismiss */}
           <button
             onClick={e => { e.stopPropagation(); dismissToast(toast.id) }}
-            className="w-5 h-5 rounded-lg flex items-center justify-center flex-shrink-0 text-xs"
+            className="w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0 text-xs hover:opacity-70"
             style={{ background: 'var(--surface2)', color: 'var(--text3)' }}
           >✕</button>
         </div>

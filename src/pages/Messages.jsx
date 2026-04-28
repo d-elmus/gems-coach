@@ -212,6 +212,13 @@ export function Conversation() {
       .select()
       .single()
 
+    // Broadcast to athlete's notification channel so mobile app receives instantly
+    if (!error && data) {
+      supabase.channel(`notify:athlete:${athleteId}`)
+        .send({ type: 'broadcast', event: 'new-message', payload: { id: data.id, from_id: coach.id, content, senderName: coach.full_name, senderPhoto: coach.photo_url } })
+        .catch(() => {})
+    }
+
     setSending(false)
 
     if (error) {
