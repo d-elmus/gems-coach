@@ -11,11 +11,12 @@ export function NotificationsProvider({ children }) {
   const locationRef = useRef(location.pathname)
   const [toasts, setToasts] = useState([])
   const [unread, setUnread] = useState(0)
-  const timerRefs = useRef({})
+  // Sync Set for O(1) dedup — avoids double-notify from broadcast + pg_changes
+  const seen = useRef(new Set())
+  const timers = useRef({})
 
   useEffect(() => { locationRef.current = location.pathname }, [location.pathname])
 
-  // Request browser notification permission
   useEffect(() => {
     if (coach?.id && 'Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission()
@@ -27,95 +28,71 @@ export function NotificationsProvider({ children }) {
     if (!coach?.id) return
     supabase.from('messages')
       .select('id', { count: 'exact', head: true })
-      .eq('to_id', coach.id)
-      .is('read_at', null)
+      .eq('to_id', coach.id).is('read_at', null)
       .then(({ count }) => setUnread(count || 0))
   }, [coach?.id])
 
-  // ── Subscriptions ──────────────────────────────────────────────────────────
+  // Single channel with both broadcast AND postgres_changes
   useEffect(() => {
     if (!coach?.id) return
 
-    // 1) Broadcast channel — instant, sent by mobile app after insert
-    const broadcastChannel = supabase.channel(`notify:coach:${coach.id}`)
+    const channel = supabase.channel(`notifs:${coach.id}`)
+      // Broadcast — instant, sent by mobile app after insert
       .on('broadcast', { event: 'new-message' }, ({ payload }) => {
-        handleIncoming(payload)
+        if (payload?.id && payload?.from_id) notify(payload)
       })
-      .subscribe()
-
-    // 2) Postgres changes — backup (fires if broadcast missed / sent from web)
-    const pgChannel = supabase.channel(`notifs-pg:${coach.id}`)
+      // Postgres changes — always works, even without broadcast
       .on('postgres_changes', {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'messages',
+        event: 'INSERT', schema: 'public', table: 'messages',
         filter: `to_id=eq.${coach.id}`,
       }, ({ new: msg }) => {
-        if (!msg?.id) return
-        handleIncoming({
-          id: msg.id,
-          from_id: msg.from_id,
-          content: msg.content,
-        })
+        if (msg?.id) notify({ id: msg.id, from_id: msg.from_id, content: msg.content })
       })
       .subscribe()
 
-    return () => {
-      supabase.removeChannel(broadcastChannel)
-      supabase.removeChannel(pgChannel)
-    }
+    return () => supabase.removeChannel(channel)
   }, [coach?.id])
 
-  async function handleIncoming({ id, from_id, content, senderName, senderPhoto }) {
-    // Deduplicate — same message might arrive via broadcast AND postgres_changes
-    setToasts(prev => {
-      if (prev.find(t => t.id === id)) return prev
-      return prev // processed below
-    })
+  async function notify({ id, from_id, content, senderName, senderPhoto }) {
+    if (!id || !from_id) return
+    // Deduplicate synchronously (broadcast + pg_changes may both fire)
+    if (seen.current.has(id)) return
+    seen.current.add(id)
+    if (seen.current.size > 200) seen.current.clear()
 
-    const onThisConv = locationRef.current === `/messages/${from_id}`
-    if (!onThisConv) setUnread(n => n + 1)
+    const onConv = locationRef.current === `/messages/${from_id}`
+    if (!onConv) setUnread(n => n + 1)
 
-    // Resolve sender if not already provided (from broadcast payload)
+    // Resolve sender name/photo
     let name = senderName
     let photo = senderPhoto
-    if (!name && from_id) {
-      const { data } = await supabase.from('profiles').select('full_name,photo_url').eq('id', from_id).single()
-      name = data?.full_name || '…'
+    if (!name) {
+      const { data } = await supabase.from('profiles')
+        .select('full_name,photo_url').eq('id', from_id).single()
+      name = data?.full_name || 'Athlète'
       photo = data?.photo_url || null
     }
 
-    if (!onThisConv) {
-      const toast = { id: id || Date.now(), senderId: from_id, senderName: name, senderPhoto: photo, content }
+    if (!onConv) {
+      const toast = { id, senderId: from_id, senderName: name, senderPhoto: photo, content }
+      setToasts(prev => [...prev.slice(-2), toast])
 
-      setToasts(prev => {
-        if (prev.find(t => t.id === toast.id)) return prev // dedup
-        return [...prev.slice(-2), toast]
-      })
-
-      // Auto-dismiss
-      clearTimeout(timerRefs.current[toast.id])
-      timerRefs.current[toast.id] = setTimeout(() => {
-        dismissToast(toast.id)
-        delete timerRefs.current[toast.id]
+      clearTimeout(timers.current[id])
+      timers.current[id] = setTimeout(() => {
+        setToasts(p => p.filter(t => t.id !== id))
+        delete timers.current[id]
       }, 6000)
 
-      // Browser notification when tab not focused
-      if (!document.hasFocus() && 'Notification' in window && Notification.permission === 'granted') {
-        new Notification(`💬 ${name}`, {
-          body: content,
-          icon: photo || undefined,
-          tag: `msg-${from_id}`,
-          requireInteraction: false,
-        })
+      if (!document.hasFocus() && Notification.permission === 'granted') {
+        new Notification(`💬 ${name}`, { body: content, icon: photo || undefined, tag: `msg-${from_id}` })
       }
     }
   }
 
   function dismissToast(id) {
-    clearTimeout(timerRefs.current[id])
-    delete timerRefs.current[id]
-    setToasts(prev => prev.filter(t => t.id !== id))
+    clearTimeout(timers.current[id])
+    delete timers.current[id]
+    setToasts(p => p.filter(t => t.id !== id))
   }
 
   function clearUnread() { setUnread(0) }
