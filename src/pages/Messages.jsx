@@ -120,42 +120,42 @@ export function Conversation() {
   const bottomRef = useRef(null)
   const inputRef = useRef(null)
   const loadedRef = useRef(false)
+  const broadcastChannelRef = useRef(null) // subscribed channel used for sending broadcasts
 
   useEffect(() => {
     if (!coach?.id || !athleteId) return
 
-    // Load athlete profile + message history
     supabase.from('profiles').select('id,full_name,photo_url').eq('id', athleteId).single()
       .then(({ data }) => setAthlete(data))
 
     loadHistory()
 
-    // Real-time: subscribe to incoming messages for this conversation
-    const channel = supabase.channel(`conv:${coach.id}:${athleteId}`)
+    // Channel 1: postgres_changes for incoming messages
+    const pgChannel = supabase.channel(`conv:${coach.id}:${athleteId}`)
       .on('postgres_changes', {
         event: 'INSERT',
         schema: 'public',
         table: 'messages',
         filter: `to_id=eq.${coach.id}`,
-      }, (payload) => {
-        const msg = payload.new
-        if (msg.from_id !== athleteId) return // not this conversation
-
-        // Append directly — no round-trip
-        setMessages(prev => {
-          if (prev.find(m => m.id === msg.id)) return prev // dedup
-          return [...prev, msg]
-        })
-
-        // Mark as read immediately
-        supabase.from('messages').update({ read_at: new Date().toISOString() })
-          .eq('id', msg.id).then(() => {})
-
+      }, ({ new: msg }) => {
+        if (!msg?.id || msg.from_id !== athleteId) return
+        setMessages(prev => prev.find(m => m.id === msg.id) ? prev : [...prev, msg])
+        supabase.from('messages').update({ read_at: new Date().toISOString() }).eq('id', msg.id).then(() => {})
         decrementUnread(1)
       })
       .subscribe()
 
-    return () => supabase.removeChannel(channel)
+    // Channel 2: broadcast channel — MUST subscribe before we can send on it
+    // This is what the mobile app listens to for instant notifications
+    const bc = supabase.channel(`notify:athlete:${athleteId}`)
+    bc.subscribe()
+    broadcastChannelRef.current = bc
+
+    return () => {
+      supabase.removeChannel(pgChannel)
+      supabase.removeChannel(bc)
+      broadcastChannelRef.current = null
+    }
   }, [coach?.id, athleteId])
 
   useEffect(() => {
@@ -212,11 +212,13 @@ export function Conversation() {
       .select()
       .single()
 
-    // Broadcast to athlete's notification channel so mobile app receives instantly
-    if (!error && data) {
-      supabase.channel(`notify:athlete:${athleteId}`)
-        .send({ type: 'broadcast', event: 'new-message', payload: { id: data.id, from_id: coach.id, content, senderName: coach.full_name, senderPhoto: coach.photo_url } })
-        .catch(() => {})
+    // Broadcast to athlete — uses the already-subscribed channel (subscription required to send)
+    if (!error && data && broadcastChannelRef.current) {
+      broadcastChannelRef.current.send({
+        type: 'broadcast',
+        event: 'new-message',
+        payload: { id: data.id, from_id: coach.id, content, senderName: coach.full_name, senderPhoto: coach.photo_url },
+      }).catch(() => {})
     }
 
     setSending(false)
