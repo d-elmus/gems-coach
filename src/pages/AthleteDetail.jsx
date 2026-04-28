@@ -51,7 +51,7 @@ function SessionRow({ s }) {
 }
 
 // ─── Coach plan widget ────────────────────────────────────────────────────────
-function CoachPlanWidget({ plan, athleteId, navigate, onActivate, activating }) {
+function CoachPlanWidget({ plan, athleteId, navigate }) {
   const currentWeekIdxDefault = getCurrentWeekIdx(plan)
   const [weekIdx, setWeekIdx] = useState(currentWeekIdxDefault)
   const weeks = plan.weeks || []
@@ -117,11 +117,10 @@ function CoachPlanWidget({ plan, athleteId, navigate, onActivate, activating }) 
               ✏️ Modifier le plan
             </button>
             {!plan.is_active && (
-              <button onClick={onActivate} disabled={activating}
-                className="px-4 py-2 rounded-xl text-sm font-semibold text-center transition-opacity"
-                style={{ background: 'rgba(74,222,128,0.12)', color: '#4ade80', border: '1px solid rgba(74,222,128,0.3)', opacity: activating ? 0.6 : 1 }}>
-                {activating ? '...' : '▶ Activer ce plan'}
-              </button>
+              <div className="px-3 py-2 rounded-xl text-xs text-center"
+                style={{ background: 'rgba(250,204,21,0.06)', color: 'var(--text3)', border: '1px solid rgba(250,204,21,0.2)' }}>
+                L'athlète active ce plan depuis son app → onglet Objectifs
+              </div>
             )}
             <button onClick={() => navigate(`/athletes/${athleteId}/plans`)}
               className="px-4 py-2 rounded-xl text-sm font-semibold text-center"
@@ -223,7 +222,6 @@ export default function AthleteDetail() {
   const [coachPlan, setCoachPlan]   = useState(null)
   const [data, setData]             = useState(null)
   const [loading, setLoading]       = useState(true)
-  const [activating, setActivating] = useState(false)
 
   useEffect(() => { fetchData() }, [id, navState?.refresh])
 
@@ -247,15 +245,6 @@ export default function AthleteDetail() {
       setCoachPlan(full)
     }
     setLoading(false)
-  }
-
-  async function activatePlan(planId) {
-    setActivating(true)
-    // Deactivate all other plans for this athlete, then activate this one
-    await supabase.from('plans').update({ is_active: false }).eq('user_id', id)
-    await supabase.from('plans').update({ is_active: true }).eq('id', planId).select('id')
-    setActivating(false)
-    fetchData()
   }
 
   if (loading) return (
@@ -311,7 +300,7 @@ export default function AthleteDetail() {
       {/* ── Coach plan widget ── */}
       <div className="mb-8">
         {coachPlan
-          ? <CoachPlanWidget plan={coachPlan} athleteId={id} navigate={navigate} onActivate={() => activatePlan(coachPlan.id)} activating={activating} />
+          ? <CoachPlanWidget plan={coachPlan} athleteId={id} navigate={navigate} />
           : (
             <div className="rounded-2xl p-6 flex items-center gap-5"
               style={{ background: `${COACH_COLOR}06`, border: `1px dashed ${COACH_COLOR}33` }}>

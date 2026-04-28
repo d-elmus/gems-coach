@@ -11,11 +11,16 @@ import {
 
 const COACH_COLOR = '#22C5D5'
 
+// Returns "YYYY-MM-DD" using LOCAL timezone (not UTC like .toISOString())
+function toLocalDateStr(d) {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+}
+
 function nextMonday() {
-  const d = new Date(); d.setHours(0,0,0,0)
+  const d = new Date(); d.setHours(12,0,0,0)
   const day = d.getDay()
   d.setDate(d.getDate() + (day === 1 ? 0 : day === 0 ? 1 : 8 - day))
-  return d.toISOString().slice(0,10)
+  return toLocalDateStr(d)
 }
 
 // Parse "YYYY-MM-DD" safely (avoids UTC midnight timezone issues)
@@ -260,7 +265,7 @@ export default function PlanBuilder() {
         weekNum:    i + 1,
         phase:      phases[i]?.phase || 'BASE',
         isRecovery: phases[i]?.isRecovery || false,
-        weekStart:  ws.toISOString().slice(0,10),
+        weekStart:  toLocalDateStr(ws),
         targetTSS:  weekTSSTarget(phases[i]?.phase || 'BASE', phases[i]?.isRecovery || false, meta.level),
         actualTSS:  0,
         note:       '',
@@ -281,7 +286,7 @@ export default function PlanBuilder() {
     const ws = getWeekStartDate(idx)
     setWeeks(prev => [...prev, {
       weekNum: idx + 1, phase: 'BASE', isRecovery: false,
-      weekStart: ws.toISOString().slice(0,10),
+      weekStart: toLocalDateStr(ws),
       targetTSS: weekTSSTarget('BASE', false, meta.level),
       actualTSS: 0, note: '', sessions: [],
     }])
@@ -306,11 +311,11 @@ export default function PlanBuilder() {
       const dayOffset = Math.round((origDate - origWeekStart) / 86400000)
       const newDate = new Date(ws)
       newDate.setDate(ws.getDate() + dayOffset)
-      return { ...s, id: `coach-${Date.now()}-${Math.random().toString(36).slice(2,5)}`, date: newDate.toISOString().slice(0,10), done: false }
+      return { ...s, id: `coach-${Date.now()}-${Math.random().toString(36).slice(2,5)}`, date: toLocalDateStr(newDate), done: false }
     })
     setWeeks(prev => {
       const updated = [...prev]
-      updated.splice(newIdx, 0, { ...src, weekNum: newIdx+1, weekStart: ws.toISOString().slice(0,10), actualTSS: src.actualTSS, sessions })
+      updated.splice(newIdx, 0, { ...src, weekNum: newIdx+1, weekStart: toLocalDateStr(ws), actualTSS: src.actualTSS, sessions })
       return updated.map((w,i) => ({ ...w, weekNum: i+1 }))
     })
     setSelectedWeek(newIdx)
@@ -345,7 +350,7 @@ export default function PlanBuilder() {
         const weekStartDate = new Date(wk.weekStart + 'T12:00:00')
         const sessionDate = new Date(weekStartDate)
         sessionDate.setDate(weekStartDate.getDate() + parseInt(form.dayOfWeek))
-        const dateStr = sessionDate.toISOString().slice(0,10)
+        const dateStr = toLocalDateStr(sessionDate)
         const dur = sw ? stepsToMinutes(sw.steps) : form.duration
         const tss = sw ? stepsToTSS(sw.steps) : Math.round(dur * (zoneFactor[form.zone] ?? 0.8))
         const updated = {
@@ -375,7 +380,7 @@ export default function PlanBuilder() {
         const ws = getWeekStartDate(idx)
         updated.push({
           weekNum: idx+1, phase:'BASE', isRecovery:false,
-          weekStart: ws.toISOString().slice(0,10),
+          weekStart: toLocalDateStr(ws),
           targetTSS: weekTSSTarget('BASE',false,meta.level),
           actualTSS:0, note:'', sessions:[],
         })
@@ -386,7 +391,7 @@ export default function PlanBuilder() {
         const weekStartDate = new Date(wk.weekStart + 'T12:00:00')
         const sessionDate = new Date(weekStartDate)
         sessionDate.setDate(weekStartDate.getDate() + parseInt(form.dayOfWeek))
-        const dateStr = sessionDate.toISOString().slice(0,10)
+        const dateStr = toLocalDateStr(sessionDate)
         const baseDur = sw ? stepsToMinutes(sw.steps) : form.duration
         const durationAdj = wk.isRecovery && form.skipRecovery ? Math.round(baseDur * 0.7) : baseDur
         const tss = sw ? Math.round(stepsToTSS(sw.steps) * (wk.isRecovery && form.skipRecovery ? 0.7 : 1))
@@ -420,14 +425,17 @@ export default function PlanBuilder() {
     setError(null)
     setSaving(true)
 
+    // Include fields the mobile app reads to avoid crashes if plan is activated
     const sharedPayload = {
-      discipline:      meta.discipline,
-      level:           meta.level,
-      start_date:      meta.startDate,
-      goal_date:       meta.goalDate || null,
-      event_name:      meta.name || meta.discipline,
+      discipline:       meta.discipline,
+      level:            meta.level,
+      start_date:       meta.startDate,
+      goal_date:        meta.goalDate || null,
+      event_name:       meta.name || meta.discipline,
       weeks,
-      athlete_metrics: { ...(athletePlan?.athlete_metrics || {}), coachId: coach?.id, description: meta.description || null },
+      total_weeks:      weeks.length,
+      days_per_week:    parseInt(meta.daysPerWeek) || 5,
+      athlete_metrics:  { ...(athletePlan?.athlete_metrics || {}), coachId: coach?.id, description: meta.description || null },
     }
 
     let err
@@ -457,6 +465,15 @@ export default function PlanBuilder() {
     if (err) { setError('Erreur : ' + err.message); return }
     setSaved(true)
     setTimeout(() => { setSaved(false); navigate(`/athletes/${id}`, { state: { refresh: Date.now() } }) }, 1200)
+  }
+
+  async function deletePlan() {
+    if (!editingPlanId) return
+    const totalS = weeks.reduce((acc,w)=>acc+w.sessions.length,0)
+    if (!window.confirm(`Supprimer ce plan définitivement ?\n${meta.name || 'Ce programme'} · ${weeks.length} semaines · ${totalS} séances`)) return
+    const { error: err } = await supabase.from('plans').delete().eq('id', editingPlanId).select('id')
+    if (err) { setError('Erreur suppression : ' + err.message); return }
+    navigate(`/athletes/${id}`, { state: { refresh: Date.now() } })
   }
 
   if (loading) return (
@@ -679,6 +696,13 @@ export default function PlanBuilder() {
               style={{ background:COACH_COLOR }}>
               + Séance
             </button>
+            {editingPlanId && (
+              <button onClick={deletePlan}
+                className="px-4 py-2 rounded-xl text-sm font-semibold"
+                style={{ background:'rgba(239,68,68,0.1)', color:'#f87171', border:'1px solid rgba(239,68,68,0.2)' }}>
+                🗑 Supprimer
+              </button>
+            )}
             <button onClick={savePlan} disabled={saving}
               className="px-5 py-2 rounded-xl text-sm font-bold text-white"
               style={{ background:'var(--red)', opacity:saving?0.6:1 }}>
