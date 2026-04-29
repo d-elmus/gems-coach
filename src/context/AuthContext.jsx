@@ -35,8 +35,19 @@ export function AuthProvider({ children }) {
     setCoach(null)
   }
 
+  async function updateCoach(updates) {
+    const { data, error } = await supabase
+      .from('profiles')
+      .update(updates)
+      .eq('id', coach.id)
+      .select()
+      .single()
+    if (!error && data) setCoach(data)
+    return { error }
+  }
+
   return (
-    <AuthContext.Provider value={{ coach, loading, signIn, signOut }}>
+    <AuthContext.Provider value={{ coach, loading, signIn, signOut, updateCoach }}>
       {children}
     </AuthContext.Provider>
   )

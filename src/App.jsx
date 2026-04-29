@@ -10,6 +10,7 @@ import AthleteDetailPlans from './pages/AthleteDetailPlans'
 import AthletePlan from './pages/AthletePlan'
 import PlanBuilder from './pages/PlanBuilder'
 import { MessagesList, Conversation } from './pages/Messages'
+import CoachProfile from './pages/CoachProfile'
 import './index.css'
 
 function PrivateRoute({ children }) {
@@ -46,6 +47,7 @@ export default function App() {
           <Route path="/athletes/:id/builder" element={<PrivateRoute><PlanBuilder /></PrivateRoute>} />
           <Route path="/messages" element={<PrivateRoute><MessagesList /></PrivateRoute>} />
           <Route path="/messages/:id" element={<PrivateRoute><Conversation /></PrivateRoute>} />
+          <Route path="/profile" element={<PrivateRoute><CoachProfile /></PrivateRoute>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
         </NotificationsProvider>
