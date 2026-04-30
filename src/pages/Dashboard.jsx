@@ -2,12 +2,9 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
+import { parseDate } from '../lib/dateUtils'
 
 const COACH_COLOR = '#22C5D5'
-
-function parseDate(str) {
-  return str ? new Date(str + 'T12:00:00') : null
-}
 
 export default function Dashboard() {
   const { coach } = useAuth()

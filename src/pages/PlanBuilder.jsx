@@ -9,24 +9,9 @@ import {
   DISCIPLINES, PHASES, PHASE_COLORS, LEVELS, DAYS_SHORT,
 } from '../lib/planHelpers'
 
+import { toLocalDateStr, nextMonday, parseDate } from '../lib/dateUtils'
+
 const COACH_COLOR = '#22C5D5'
-
-// Returns "YYYY-MM-DD" using LOCAL timezone (not UTC like .toISOString())
-function toLocalDateStr(d) {
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
-}
-
-function nextMonday() {
-  const d = new Date(); d.setHours(12,0,0,0)
-  const day = d.getDay()
-  d.setDate(d.getDate() + (day === 1 ? 0 : day === 0 ? 1 : 8 - day))
-  return toLocalDateStr(d)
-}
-
-// Parse "YYYY-MM-DD" safely (avoids UTC midnight timezone issues)
-function parseDate(str) {
-  return str ? new Date(str + 'T12:00:00') : new Date()
-}
 
 // ─── Mini TSS bar chart ───────────────────────────────────────────────────────
 function LoadChart({ weeks, selectedWeek, onSelect }) {
