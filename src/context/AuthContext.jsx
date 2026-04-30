@@ -21,6 +21,12 @@ export function AuthProvider({ children }) {
 
   async function fetchCoach(userId) {
     const { data } = await supabase.from('profiles').select('*').eq('id', userId).single()
+    if (!data || (data.role !== 'coach' && data.role !== 'admin')) {
+      await supabase.auth.signOut()
+      setCoach(null)
+      setLoading(false)
+      return
+    }
     setCoach(data)
     setLoading(false)
   }
