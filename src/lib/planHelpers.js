@@ -138,3 +138,5 @@ export const PHASE_COLORS = {
 }
 export const LEVELS = ['beginner','intermediate','advanced','expert']
 export const DAYS_SHORT = ['Lun','Mar','Mer','Jeu','Ven','Sam','Dim']
+
+export const COACH_COLOR = '#22C5D5'

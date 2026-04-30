@@ -1,6 +1,5 @@
 import { ZONE_COLORS } from '../lib/planHelpers'
 
-const COACH_COLOR = '#22C5D5'
 const ZONES = ['Z1', 'Z2', 'Z3', 'Z4', 'Z5']
 
 export const STEP_META = {

@@ -2,10 +2,9 @@ import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
-import { PHASE_COLORS, SPORT_META } from '../lib/planHelpers'
+import { PHASE_COLORS, SPORT_META, COACH_COLOR } from '../lib/planHelpers'
 import { parseDate } from '../lib/dateUtils'
 
-const COACH_COLOR = '#22C5D5'
 
 function fmt(str) {
   const d = parseDate(str)

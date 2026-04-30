@@ -3,8 +3,8 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { useNotifications } from '../context/NotificationsContext'
+import { COACH_COLOR } from '../lib/planHelpers'
 
-const COACH_COLOR = '#22C5D5'
 
 // ─── Messages list ────────────────────────────────────────────────────────────
 export function MessagesList() {

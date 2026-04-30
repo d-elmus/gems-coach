@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { COACH_COLOR } from '../lib/planHelpers'
 
 const PHASE_COLORS = {
   PREP: '#B52E38', BASE: '#0A9DAB', BUILD: '#D9541A', PEAK: '#C0392B', TAPER: '#1E8449'
@@ -13,7 +14,6 @@ const SPORT_OPTIONS = [
   { value: 'strength', label: '💪 Renfo' },
 ]
 const SPORT_EMOJI = { swim: '🏊', bike: '🚴', run: '🏃', brick: '🔗', strength: '💪' }
-const COACH_COLOR = '#22C5D5'
 
 // ─── Session Modal ────────────────────────────────────────────────────────────
 function SessionModal({ session, weekStart, onSave, onDelete, onClose }) {

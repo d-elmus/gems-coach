@@ -239,7 +239,7 @@ export default function PlanBuilder() {
     if (!meta.startDate) return
     const hasExisting = weeks.some(w => w.sessions?.length > 0)
     if (editingPlanId && hasExisting) {
-      if (!window.confirm('Régénérer les semaines effacera toutes les séances existantes. Continuer ?')) return
+      if (!window.confirm('Regenerate weeks? All existing sessions will be lost.')) return
     }
     const n = totalWeeks || 12
     const phases = autoAssignPhases(n, parseInt(meta.recoveryFreq))
@@ -280,7 +280,7 @@ export default function PlanBuilder() {
 
   function removeWeek(idx) {
     if (weeks[idx]?.sessions?.length > 0) {
-      if (!window.confirm(`Supprimer la semaine ${idx+1} (${weeks[idx].sessions.length} séance${weeks[idx].sessions.length > 1 ? 's' : ''}) ?`)) return
+      if (!window.confirm(`Delete week ${idx+1} (${weeks[idx].sessions.length} session${weeks[idx].sessions.length > 1 ? 's' : ''})?`)) return
     }
     setWeeks(prev => prev.filter((_,i)=>i!==idx).map((w,i)=>({...w,weekNum:i+1})))
     setSelectedWeek(Math.max(0, idx - 1))
@@ -459,7 +459,7 @@ export default function PlanBuilder() {
   async function deletePlan() {
     if (!editingPlanId) return
     const totalS = weeks.reduce((acc,w)=>acc+w.sessions.length,0)
-    if (!window.confirm(`Supprimer ce plan définitivement ?\n${meta.name || 'Ce programme'} · ${weeks.length} semaines · ${totalS} séances`)) return
+    if (!window.confirm(`Permanently delete this plan?\n${meta.name || 'This program'} · ${weeks.length} weeks · ${totalS} sessions`)) return
     const { error: err } = await supabase.from('plans').delete().eq('id', editingPlanId).select('id')
     if (err) { setError('Erreur suppression : ' + err.message); return }
     navigate(`/athletes/${id}`, { state: { refresh: Date.now() } })

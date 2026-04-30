@@ -8,7 +8,6 @@ import WorkoutBuilder, {
 } from './WorkoutBuilder'
 
 const ZONES = ['Z1','Z2','Z3','Z4','Z5']
-const COACH_COLOR = '#22C5D5'
 
 export default function SessionModal({ weekStart, weekIdx, totalWeeks, athletePlan, onAdd, onClose, editSession }) {
   const isEdit = !!editSession
