@@ -186,7 +186,7 @@ export function Conversation() {
 
   async function sendMessage(e) {
     e.preventDefault()
-    const content = text.trim()
+    const content = text.trim().slice(0, 4000)
     if (!content || sending) return
 
     setSending(true)
