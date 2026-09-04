@@ -55,6 +55,7 @@ export default function Register() {
       email: form.email,
       role: 'coach',
       gender: null,
+      coach_available: true,
     })
 
     // 5. Marquer le code comme utilisé
