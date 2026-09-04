@@ -75,11 +75,12 @@ function ClaimCodeForm() {
   )
 }
 
-export default function Login() {
-  const { signIn, hasSession, coach, loading: authLoading } = useAuth()
+// Compte pas encore confirmé : ce projet envoie un code à 6 chiffres par
+// email pour confirmer un signup (pas un lien cliquable).
+function ConfirmEmailForm({ email }) {
+  const { confirmSignupOtp } = useAuth()
   const navigate = useNavigate()
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
+  const [otp, setOtp] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
@@ -87,16 +88,68 @@ export default function Login() {
     e.preventDefault()
     setLoading(true)
     setError('')
+    const { error } = await confirmSignupOtp(email, otp)
+    if (error) {
+      setError('Code incorrect ou expiré.')
+      setLoading(false)
+    } else navigate('/')
+  }
+
+  return (
+    <Shell title="Confirme ton email" subtitle={`Entre le code à 6 chiffres reçu par email à ${email}.`}>
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+        <input
+          type="text"
+          inputMode="numeric"
+          value={otp}
+          onChange={e => setOtp(e.target.value)}
+          required
+          className="w-full px-4 py-3 rounded-xl text-sm text-white outline-none text-center tracking-[0.3em]"
+          style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }}
+          placeholder="000000"
+        />
+        {error && <p className="text-sm text-red-400">{error}</p>}
+        <button
+          type="submit"
+          disabled={loading}
+          className="w-full py-3 rounded-xl font-semibold text-white mt-2 transition-opacity"
+          style={{ background: 'var(--red)', opacity: loading ? 0.6 : 1 }}
+        >
+          {loading ? 'Vérification...' : 'Confirmer'}
+        </button>
+      </form>
+    </Shell>
+  )
+}
+
+export default function Login() {
+  const { signIn, hasSession, coach, loading: authLoading } = useAuth()
+  const navigate = useNavigate()
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [needsConfirm, setNeedsConfirm] = useState(false)
+
+  async function handleSubmit(e) {
+    e.preventDefault()
+    setLoading(true)
+    setError('')
     const { error } = await signIn(email, password)
     if (error) {
-      setError(error.message === 'needs_code'
-        ? "Connexion réussie, mais ce compte n'est pas encore activé comme coach."
-        : 'Email ou mot de passe incorrect')
+      if (error.message === 'email_not_confirmed') {
+        setNeedsConfirm(true)
+      } else {
+        setError(error.message === 'needs_code'
+          ? "Connexion réussie, mais ce compte n'est pas encore activé comme coach."
+          : 'Email ou mot de passe incorrect')
+      }
       setLoading(false)
     }
     else navigate('/')
   }
 
+  if (needsConfirm) return <ConfirmEmailForm email={email} />
   if (!authLoading && hasSession && !coach) return <ClaimCodeForm />
 
   return (

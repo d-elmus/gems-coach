@@ -2,13 +2,18 @@ import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { finalizeCoachSignup } from '../lib/coachSignup'
+import { useAuth } from '../context/AuthContext'
 
 export default function Register() {
   const navigate = useNavigate()
+  const { confirmSignupOtp } = useAuth()
   const [form, setForm] = useState({ email: '', password: '', name: '', code: '' })
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [confirmSent, setConfirmSent] = useState(false)
+  const [otp, setOtp] = useState('')
+  const [otpError, setOtpError] = useState('')
+  const [otpLoading, setOtpLoading] = useState(false)
 
   const set = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }))
 
@@ -61,18 +66,45 @@ export default function Register() {
     navigate('/')
   }
 
+  async function handleVerifyOtp(e) {
+    e.preventDefault()
+    setOtpLoading(true)
+    setOtpError('')
+    const { error } = await confirmSignupOtp(form.email, otp)
+    setOtpLoading(false)
+    if (error) setOtpError('Code incorrect ou expiré.')
+    else navigate('/')
+  }
+
   if (confirmSent) {
     return (
       <div className="min-h-screen flex items-center justify-center px-4" style={{ background: 'var(--bg)' }}>
-        <div className="w-full max-w-sm text-center">
-          <h1 className="text-2xl font-bold text-white mb-3">Vérifie ta boîte mail</h1>
-          <p className="text-sm mb-8" style={{ color: 'var(--text3)' }}>
-            On a envoyé un lien de confirmation à <span style={{ color: 'var(--cyan)' }}>{form.email}</span>.
-            Clique dessus (pense à vérifier les spams), puis connecte-toi — ton compte coach sera activé automatiquement.
+        <div className="w-full max-w-sm">
+          <h1 className="text-2xl font-bold text-white mb-1 text-center">Confirme ton email</h1>
+          <p className="text-sm mb-8 text-center" style={{ color: 'var(--text3)' }}>
+            Entre le code à 6 chiffres reçu par email à <span style={{ color: 'var(--cyan)' }}>{form.email}</span> (vérifie aussi les spams).
           </p>
-          <Link to="/login" className="font-semibold text-sm" style={{ color: 'var(--cyan)' }}>
-            Aller à la connexion →
-          </Link>
+          <form onSubmit={handleVerifyOtp} className="flex flex-col gap-4">
+            <input
+              type="text"
+              inputMode="numeric"
+              value={otp}
+              onChange={e => setOtp(e.target.value)}
+              required
+              className="w-full px-4 py-3 rounded-xl text-sm text-white outline-none text-center tracking-[0.3em]"
+              style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }}
+              placeholder="000000"
+            />
+            {otpError && <p className="text-sm" style={{ color: '#f87171' }}>{otpError}</p>}
+            <button
+              type="submit"
+              disabled={otpLoading}
+              className="w-full py-3 rounded-xl font-semibold text-white mt-2"
+              style={{ background: 'var(--red)', opacity: otpLoading ? 0.6 : 1 }}
+            >
+              {otpLoading ? 'Vérification...' : 'Confirmer'}
+            </button>
+          </form>
         </div>
       </div>
     )

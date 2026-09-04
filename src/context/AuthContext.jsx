@@ -47,6 +47,25 @@ export function AuthProvider({ children }) {
 
   async function signIn(email, password) {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password })
+    if (error) {
+      if (error.message?.toLowerCase().includes('email not confirmed')) {
+        return { error: { message: 'email_not_confirmed' } }
+      }
+      return { error }
+    }
+    const profile = await resolveCoach(data.user.id)
+    if (!profile) return { error: { message: 'needs_code' } }
+    return { error: null }
+  }
+
+  // Confirme un compte via le code à 6 chiffres reçu par email (ce projet
+  // Supabase envoie un OTP, pas un lien cliquable, pour confirmer un signup).
+  async function confirmSignupOtp(email, token) {
+    const { data, error } = await supabase.auth.verifyOtp({
+      email: email.trim(),
+      token: token.trim(),
+      type: 'signup',
+    })
     if (error) return { error }
     const profile = await resolveCoach(data.user.id)
     if (!profile) return { error: { message: 'needs_code' } }
@@ -87,7 +106,7 @@ export function AuthProvider({ children }) {
   }
 
   return (
-    <AuthContext.Provider value={{ coach, hasSession, loading, signIn, signOut, updateCoach, claimCoachCode }}>
+    <AuthContext.Provider value={{ coach, hasSession, loading, signIn, signOut, updateCoach, claimCoachCode, confirmSignupOtp }}>
       {children}
     </AuthContext.Provider>
   )
