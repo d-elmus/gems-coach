@@ -1,12 +1,14 @@
 import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { finalizeCoachSignup } from '../lib/coachSignup'
 
 export default function Register() {
   const navigate = useNavigate()
   const [form, setForm] = useState({ email: '', password: '', name: '', code: '' })
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [confirmSent, setConfirmSent] = useState(false)
 
   const set = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }))
 
@@ -33,35 +35,47 @@ export default function Register() {
       return
     }
 
-    // 2. Créer le compte auth
+    // 2. Créer le compte auth — le code est stocké dans les métadonnées pour
+    // être consommé plus tard si la confirmation par email est requise
     const { data: authData, error: authErr } = await supabase.auth.signUp({
       email: form.email,
       password: form.password,
-      options: { data: { full_name: form.name, role: 'coach' } }
+      options: { data: { full_name: form.name, role: 'coach', coach_code: form.code.trim().toUpperCase() } }
     })
     if (authErr) { setError(authErr.message); setLoading(false); return }
 
     const userId = authData.user?.id
     if (!userId) { setError('Erreur lors de la création du compte.'); setLoading(false); return }
 
-    // 3. Se connecter pour avoir une session active
-    const { error: signInErr } = await supabase.auth.signInWithPassword({ email: form.email, password: form.password })
-    if (signInErr) { setError(signInErr.message); setLoading(false); return }
+    if (!authData.session) {
+      // Confirmation par email requise : pas de session active, on ne peut
+      // pas encore écrire le profil (RLS). Finalisé automatiquement à la
+      // première connexion réussie (voir AuthContext.fetchCoach/signIn).
+      setLoading(false)
+      setConfirmSent(true)
+      return
+    }
 
-    // 4. Maintenant on a une session → mettre à jour le profil avec rôle coach
-    await supabase.from('profiles').upsert({
-      id: userId,
-      full_name: form.name,
-      email: form.email,
-      role: 'coach',
-      gender: null,
-      coach_available: true,
-    })
-
-    // 5. Marquer le code comme utilisé
-    await supabase.from('coach_codes').update({ used_by: userId, used_at: new Date().toISOString() }).eq('id', codeRow.id)
-
+    // Confirmation email désactivée → session déjà active, on finalise tout de suite
+    await finalizeCoachSignup(userId)
     navigate('/')
+  }
+
+  if (confirmSent) {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-4" style={{ background: 'var(--bg)' }}>
+        <div className="w-full max-w-sm text-center">
+          <h1 className="text-2xl font-bold text-white mb-3">Vérifie ta boîte mail</h1>
+          <p className="text-sm mb-8" style={{ color: 'var(--text3)' }}>
+            On a envoyé un lien de confirmation à <span style={{ color: 'var(--cyan)' }}>{form.email}</span>.
+            Clique dessus (pense à vérifier les spams), puis connecte-toi — ton compte coach sera activé automatiquement.
+          </p>
+          <Link to="/login" className="font-semibold text-sm" style={{ color: 'var(--cyan)' }}>
+            Aller à la connexion →
+          </Link>
+        </div>
+      </div>
+    )
   }
 
   return (

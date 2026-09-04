@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
+import { finalizeCoachSignup } from '../lib/coachSignup'
 
 const AuthContext = createContext(null)
 
@@ -20,7 +21,8 @@ export function AuthProvider({ children }) {
   }, [])
 
   async function fetchCoach(userId) {
-    const { data } = await supabase.from('profiles').select('*').eq('id', userId).single()
+    let { data } = await supabase.from('profiles').select('*').eq('id', userId).single()
+    if (!data) data = await finalizeCoachSignup(userId)
     if (!data || (data.role !== 'coach' && data.role !== 'admin')) {
       await supabase.auth.signOut()
       setCoach(null)
@@ -34,7 +36,8 @@ export function AuthProvider({ children }) {
   async function signIn(email, password) {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password })
     if (error) return { error }
-    const { data: profile } = await supabase.from('profiles').select('*').eq('id', data.user.id).single()
+    let { data: profile } = await supabase.from('profiles').select('*').eq('id', data.user.id).single()
+    if (!profile) profile = await finalizeCoachSignup(data.user.id)
     if (!profile || (profile.role !== 'coach' && profile.role !== 'admin')) {
       await supabase.auth.signOut()
       return { error: { message: 'not_coach' } }
