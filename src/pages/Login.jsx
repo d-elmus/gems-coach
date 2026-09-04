@@ -15,7 +15,12 @@ export default function Login() {
     setLoading(true)
     setError('')
     const { error } = await signIn(email, password)
-    if (error) { setError('Email ou mot de passe incorrect'); setLoading(false) }
+    if (error) {
+      setError(error.message === 'not_coach'
+        ? "Ce compte existe mais n'est pas un compte coach. Crée un compte coach via le lien d'inscription."
+        : 'Email ou mot de passe incorrect')
+      setLoading(false)
+    }
     else navigate('/')
   }
 

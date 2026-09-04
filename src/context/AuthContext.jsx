@@ -32,8 +32,14 @@ export function AuthProvider({ children }) {
   }
 
   async function signIn(email, password) {
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
-    return { error }
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password })
+    if (error) return { error }
+    const { data: profile } = await supabase.from('profiles').select('*').eq('id', data.user.id).single()
+    if (!profile || (profile.role !== 'coach' && profile.role !== 'admin')) {
+      await supabase.auth.signOut()
+      return { error: { message: 'not_coach' } }
+    }
+    return { error: null }
   }
 
   async function signOut() {
