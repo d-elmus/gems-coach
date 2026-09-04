@@ -13,15 +13,22 @@ import { supabase } from './supabase'
 // réclamer le même code.
 //
 // Appelé après signUp() si une session existe déjà, ou plus tard depuis
-// AuthContext dès qu'une session apparaît (ex: après confirmation d'email).
-// Idempotent : si le profil existe déjà, il est simplement retourné.
+// AuthContext dès qu'une session apparaît (ex: après confirmation d'email,
+// ou saisie a posteriori du code sur un compte déjà créé).
+// Idempotent : si le profil est déjà coach/admin, il est simplement retourné.
+//
+// Un trigger DB (on_auth_user_created → handle_new_user) crée un profil par
+// défaut (role='athlete') dès l'insertion dans auth.users, avant même que le
+// code soit saisi. On ne peut donc pas se contenter de "profil absent" comme
+// signal — il faut toujours retenter la promotion tant que le rôle n'est pas
+// déjà coach/admin.
 export async function finalizeCoachSignup(userId) {
   const { data: existing } = await supabase.from('profiles').select('*').eq('id', userId).single()
-  if (existing) return existing
+  if (existing && (existing.role === 'coach' || existing.role === 'admin')) return existing
 
   const { data: { user } } = await supabase.auth.getUser()
   const code = user?.user_metadata?.coach_code
-  if (!code) return null
+  if (!code) return existing || null
 
   const { data: claimed } = await supabase
     .from('coach_codes')
@@ -30,14 +37,14 @@ export async function finalizeCoachSignup(userId) {
     .is('used_by', null)
     .select('id')
     .single()
-  if (!claimed) return null
+  if (!claimed) return existing || null
 
   const { data: profile } = await supabase.from('profiles').upsert({
     id: userId,
-    full_name: user.user_metadata?.full_name || '',
+    full_name: user.user_metadata?.full_name || existing?.full_name || '',
     email: user.email,
     role: 'coach',
-    gender: null,
+    gender: existing?.gender ?? null,
     coach_available: true,
   }).select().single()
 

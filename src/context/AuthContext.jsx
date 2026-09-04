@@ -29,7 +29,9 @@ export function AuthProvider({ children }) {
   // que de le rejeter en silence.
   async function resolveCoach(userId) {
     let { data } = await supabase.from('profiles').select('*').eq('id', userId).single()
-    if (!data) data = await finalizeCoachSignup(userId)
+    if (!data || (data.role !== 'coach' && data.role !== 'admin')) {
+      data = await finalizeCoachSignup(userId)
+    }
     if (!data || (data.role !== 'coach' && data.role !== 'admin')) {
       setCoach(null)
       return null
