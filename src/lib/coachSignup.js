@@ -1,7 +1,17 @@
 import { supabase } from './supabase'
 
-// Finalise le profil coach (upsert + consommation du code d'invitation) à partir
-// des métadonnées stockées sur le compte auth lors de l'inscription.
+// Finalise le profil coach à partir d'un code d'invitation stocké dans les
+// métadonnées du compte auth au moment de l'inscription.
+//
+// Le rôle n'est JAMAIS déduit de user_metadata.role : ce champ est contrôlé
+// par le client (n'importe quel utilisateur connecté peut l'écrire via
+// supabase.auth.updateUser({ data: { role: 'coach' } })), donc s'y fier
+// reviendrait à laisser n'importe quel athlète s'auto-promouvoir coach.
+// Seul un coach_code valide et pas encore utilisé peut produire un profil
+// role='coach' — et on le consomme de façon atomique (UPDATE ... WHERE
+// used_by IS NULL) pour empêcher deux finalisations concurrentes de
+// réclamer le même code.
+//
 // Appelé après signUp() si une session existe déjà, ou plus tard depuis
 // AuthContext dès qu'une session apparaît (ex: après confirmation d'email).
 // Idempotent : si le profil existe déjà, il est simplement retourné.
@@ -10,28 +20,26 @@ export async function finalizeCoachSignup(userId) {
   if (existing) return existing
 
   const { data: { user } } = await supabase.auth.getUser()
-  const meta = user?.user_metadata
-  if (!meta || meta.role !== 'coach') return null
+  const code = user?.user_metadata?.coach_code
+  if (!code) return null
+
+  const { data: claimed } = await supabase
+    .from('coach_codes')
+    .update({ used_by: userId, used_at: new Date().toISOString() })
+    .eq('code', code)
+    .is('used_by', null)
+    .select('id')
+    .single()
+  if (!claimed) return null
 
   const { data: profile } = await supabase.from('profiles').upsert({
     id: userId,
-    full_name: meta.full_name || '',
+    full_name: user.user_metadata?.full_name || '',
     email: user.email,
     role: 'coach',
     gender: null,
     coach_available: true,
   }).select().single()
-
-  if (meta.coach_code) {
-    const { data: codeRow } = await supabase
-      .from('coach_codes')
-      .select('id, used_by')
-      .eq('code', meta.coach_code)
-      .single()
-    if (codeRow && !codeRow.used_by) {
-      await supabase.from('coach_codes').update({ used_by: userId, used_at: new Date().toISOString() }).eq('id', codeRow.id)
-    }
-  }
 
   return profile
 }
