@@ -31,7 +31,7 @@ function SessionRow({ s }) {
         <p className="text-sm text-white font-semibold truncate">{s.label}</p>
         <p className="text-xs" style={{ color: 'var(--text3)' }}>
           {day} · {s.duration}min{s.distance ? ` · ${s.distance}${m.distUnit}` : ''}
-          {s.structuredWorkout?.steps?.length > 0 ? ' · ⚡ structuré' : ''}
+          {Array.isArray(s.blocks) && s.blocks.length > 0 ? ` · ${s.blocks.length} bloc${s.blocks.length > 1 ? 's' : ''}` : ''}
         </p>
       </div>
       {s.zone && (

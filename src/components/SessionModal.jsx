@@ -1,13 +1,46 @@
 import { useState, useEffect } from 'react'
 import {
   SPORT_META, SESSION_PRESETS, ZONE_COLORS, DAYS_SHORT,
-  getZoneTargets,
+  getZoneTargets, COACH_COLOR,
 } from '../lib/planHelpers'
-import WorkoutBuilder, {
-  newStep, newRepeat, stepsToMinutes, stepsToTSS,
-} from './WorkoutBuilder'
 
 const ZONES = ['Z1','Z2','Z3','Z4','Z5']
+
+// Types de bloc = ceux que l'app athlète comprend (SessionBlock.type).
+const BLOCK_TYPES = [
+  { id: 'warmup',   label: 'Échauffement', emoji: '🔥' },
+  { id: 'work',     label: 'Travail',      emoji: '⚡' },
+  { id: 'recovery', label: 'Récupération', emoji: '🌀' },
+  { id: 'cooldown', label: 'Retour calme', emoji: '❄️' },
+  { id: 'other',    label: 'Autre',        emoji: '●'  },
+]
+const BLOCK_META = Object.fromEntries(BLOCK_TYPES.map(b => [b.id, b]))
+
+// La zone d'un bloc peut arriver en nombre (4) ou en chaîne ("Z4") depuis l'app/web.
+// On normalise en "Z4" pour l'UI ; l'app relit indifféremment l'un ou l'autre.
+function zoneToStr(z) {
+  if (z == null || z === '') return ''
+  if (typeof z === 'number') return 'Z' + z
+  const d = String(z).match(/\d/)
+  return d ? 'Z' + d[0] : ''
+}
+
+// Reprend un bloc existant en préservant ses champs inconnus (target, instructions_en…).
+function normBlock(b = {}) {
+  return {
+    ...b,
+    type: b.type || 'work',
+    label: b.label || '',
+    instructions: b.instructions || '',
+    zone: zoneToStr(b.zone),
+    duration: b.duration ?? '',
+    distance: b.distance ?? '',
+  }
+}
+
+function emptyBlock(type = 'work') {
+  return { type, label: '', instructions: '', zone: BLOCK_META[type] ? (type === 'work' ? 'Z4' : type === 'warmup' || type === 'recovery' || type === 'cooldown' ? 'Z1' : 'Z2') : '', duration: '', distance: '' }
+}
 
 export default function SessionModal({ weekStart, weekIdx, totalWeeks, athletePlan, onAdd, onClose, editSession }) {
   const isEdit = !!editSession
@@ -19,18 +52,16 @@ export default function SessionModal({ weekStart, weekIdx, totalWeeks, athletePl
   const [duration, setDuration]   = useState(45)
   const [distance, setDistance]   = useState('')
   const [zone, setZone]           = useState('Z2')
-  const [note, setNote]           = useState('')
-  const [instructions, setInstructions] = useState('')
+  const [note, setNote]           = useState('')       // note coach privée (carte coach)
+  const [rpe, setRpe]             = useState('')        // RPE ressenti (lu par l'app)
+  const [nutritionTip, setNutritionTip] = useState('') // conseil nutrition (lu par l'app)
+  const [blocks, setBlocks]       = useState([])        // contenu détaillé (lu par l'app)
   const [repeat, setRepeat]       = useState(1)
   const [skipRecovery, setSkipRecovery] = useState(true)
 
-  // Structured workout
-  const [workoutMode, setWorkoutMode] = useState('simple') // 'simple' | 'structured'
-  const [workoutSteps, setWorkoutSteps] = useState([])
-
   const zoneTarget = getZoneTargets(athletePlan, sport, zone)
 
-  // Populate fields when editing an existing session
+  // Pré-remplit tous les champs quand on édite une séance existante (dont une séance importée).
   useEffect(() => {
     if (!editSession) return
     setSport(editSession.sport || 'run')
@@ -39,32 +70,15 @@ export default function SessionModal({ weekStart, weekIdx, totalWeeks, athletePl
     setDistance(editSession.distance != null ? editSession.distance : '')
     setZone(editSession.zone || 'Z2')
     setNote(editSession.coachNote || '')
-    setInstructions(editSession.instructions || '')
-    if (editSession.structuredWorkout?.steps?.length) {
-      setWorkoutMode('structured')
-      setWorkoutSteps(editSession.structuredWorkout.steps)
-    }
+    setRpe(editSession.rpe || '')
+    setNutritionTip(editSession.nutritionTip || '')
+    setBlocks(Array.isArray(editSession.blocks) ? editSession.blocks.map(normBlock) : [])
     if (editSession.date && weekStart) {
       const d = new Date(editSession.date + 'T12:00:00')
       const jsDay = d.getDay()
       setDayOfWeek(jsDay === 0 ? 6 : jsDay - 1)
     }
   }, [editSession])
-
-  // When workout steps change in structured mode, sync duration
-  useEffect(() => {
-    if (workoutMode === 'structured' && workoutSteps.length > 0) {
-      const mins = stepsToMinutes(workoutSteps)
-      if (mins > 0) setDuration(mins)
-    }
-  }, [workoutSteps, workoutMode])
-
-  function switchToStructured() {
-    setWorkoutMode('structured')
-    if (workoutSteps.length === 0) {
-      setWorkoutSteps([newStep('warmup'), newRepeat(), newStep('cooldown')])
-    }
-  }
 
   function applyPreset(p) {
     setPreset(p)
@@ -74,27 +88,47 @@ export default function SessionModal({ weekStart, weekIdx, totalWeeks, athletePl
     if (p.zone) setZone(p.zone)
   }
 
+  // ── Manipulation des blocs ──
+  function addBlock(type = 'work') { setBlocks(prev => [...prev, emptyBlock(type)]) }
+  function updateBlock(i, patch)   { setBlocks(prev => prev.map((b, idx) => idx === i ? { ...b, ...patch } : b)) }
+  function removeBlock(i)          { setBlocks(prev => prev.filter((_, idx) => idx !== i)) }
+  function moveBlock(i, dir) {
+    setBlocks(prev => {
+      const n = [...prev]
+      const j = i + dir
+      if (j < 0 || j >= n.length) return prev
+      ;[n[i], n[j]] = [n[j], n[i]]
+      return n
+    })
+  }
+
   const presets = SESSION_PRESETS[sport] || []
   const sportM  = SPORT_META[sport]
   const maxRepeat = Math.max(1, totalWeeks - weekIdx)
-
-  const computedDuration = workoutMode === 'structured' && workoutSteps.length > 0
-    ? stepsToMinutes(workoutSteps)
-    : parseInt(duration) || 0
+  const blocksTotalMin = blocks.reduce((a, b) => a + (parseInt(b.duration) || 0), 0)
 
   function handleSubmit() {
-    const sw = workoutMode === 'structured' && workoutSteps.length > 0
-      ? { steps: workoutSteps }
-      : null
+    const cleanBlocks = blocks.map(b => ({
+      ...b,
+      type: b.type || 'work',
+      label: b.label?.trim() || undefined,
+      instructions: b.instructions?.trim() || undefined,
+      zone: b.zone || undefined,
+      duration: b.duration === '' || b.duration == null ? undefined : (parseInt(b.duration) || undefined),
+      distance: b.distance === '' || b.distance == null ? undefined : (parseFloat(b.distance) || undefined),
+    }))
     onAdd({
       sport, label, dayOfWeek,
-      duration: computedDuration || parseInt(duration),
+      duration: parseInt(duration) || 0,
       distance: distance !== '' ? parseFloat(distance) : null,
-      zone, note, instructions,
+      zone,
+      note,
+      rpe: rpe.trim(),
+      nutritionTip: nutritionTip.trim(),
+      blocks: cleanBlocks,
       repeat: isEdit ? 1 : repeat,
       skipRecovery,
       editId: isEdit ? editSession.id : undefined,
-      structuredWorkout: sw,
     })
   }
 
@@ -181,20 +215,16 @@ export default function SessionModal({ weekStart, weekIdx, totalWeeks, athletePl
             <div>
               <label className="text-[10px] font-bold uppercase tracking-widest mb-1.5 block" style={{ color: 'var(--text3)' }}>
                 Durée (min)
-                {workoutMode === 'structured' && workoutSteps.length > 0 && (
-                  <span className="ml-1 normal-case font-normal" style={{ color: COACH_COLOR }}>calculée ✓</span>
+                {blocksTotalMin > 0 && (
+                  <button onClick={() => setDuration(blocksTotalMin)} className="ml-1 normal-case font-normal underline" style={{ color: COACH_COLOR }}>
+                    Σ blocs {blocksTotalMin}
+                  </button>
                 )}
               </label>
-              <input type="number" value={workoutMode === 'structured' ? computedDuration : duration}
-                onChange={e => setDuration(e.target.value)}
-                readOnly={workoutMode === 'structured' && workoutSteps.length > 0}
+              <input type="number" value={duration} onChange={e => setDuration(e.target.value)}
                 min={10} max={480}
                 className="w-full px-3 py-2.5 rounded-xl text-sm text-white outline-none"
-                style={{
-                  background: 'var(--surface2)',
-                  border: `1px solid ${workoutMode === 'structured' ? COACH_COLOR + '55' : 'var(--border)'}`,
-                  opacity: workoutMode === 'structured' ? 0.7 : 1,
-                }} />
+                style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }} />
             </div>
             <div>
               <label className="text-[10px] font-bold uppercase tracking-widest mb-1.5 block" style={{ color: 'var(--text3)' }}>
@@ -207,11 +237,10 @@ export default function SessionModal({ weekStart, weekIdx, totalWeeks, athletePl
             </div>
           </div>
 
-          {/* Zone cible globale */}
+          {/* Zone dominante */}
           <div>
             <label className="text-[10px] font-bold uppercase tracking-widest mb-2 block" style={{ color: 'var(--text3)' }}>
-              Zone dominante
-              {workoutMode === 'structured' && <span className="ml-1 normal-case font-normal" style={{ color: 'var(--text3)' }}>(utilisée pour le TSS si mode simple)</span>}
+              Zone dominante <span className="normal-case font-normal">(sert au calcul du TSS)</span>
             </label>
             <div className="flex gap-2 mb-2">
               {ZONES.map(z => (
@@ -236,71 +265,144 @@ export default function SessionModal({ weekStart, weekIdx, totalWeeks, athletePl
             )}
           </div>
 
-          {/* ── Mode toggle: Simple / Structuré ── */}
+          {/* ── Contenu détaillé : blocs (ce que voit l'athlète) ── */}
           <div>
-            <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center justify-between mb-2">
               <label className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--text3)' }}>
-                Contenu de la séance
+                Contenu détaillé <span className="normal-case font-normal">— affiché à l'athlète</span>
               </label>
-              <div className="flex rounded-xl overflow-hidden" style={{ border: '1px solid var(--border)' }}>
-                <button onClick={() => setWorkoutMode('simple')}
-                  className="px-3 py-1.5 text-xs font-semibold transition-all"
-                  style={{
-                    background: workoutMode === 'simple' ? 'var(--surface2)' : 'transparent',
-                    color: workoutMode === 'simple' ? 'var(--text2)' : 'var(--text3)',
-                  }}>
-                  ✏️ Texte libre
-                </button>
-                <button onClick={switchToStructured}
-                  className="px-3 py-1.5 text-xs font-semibold transition-all"
-                  style={{
-                    background: workoutMode === 'structured' ? COACH_COLOR + '22' : 'transparent',
-                    color: workoutMode === 'structured' ? COACH_COLOR : 'var(--text3)',
-                    borderLeft: '1px solid var(--border)',
-                  }}>
-                  ⚡ Structuré
-                </button>
-              </div>
+              <button onClick={() => addBlock('work')}
+                className="text-xs font-semibold px-2.5 py-1 rounded-lg"
+                style={{ background: COACH_COLOR + '22', color: COACH_COLOR, border: `1px solid ${COACH_COLOR}55` }}>
+                + Bloc
+              </button>
             </div>
 
-            {/* Simple mode: instructions textarea */}
-            {workoutMode === 'simple' && (
-              <textarea value={instructions} onChange={e => setInstructions(e.target.value)}
-                placeholder="Ex: Échauffement 10 min Z1 · 5×1000m @Z4 récup 2min · Retour au calme 10 min Z1"
-                rows={4} className="w-full px-4 py-2.5 rounded-xl text-sm text-white outline-none resize-none"
-                style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }} />
-            )}
-
-            {/* Structured mode: WorkoutBuilder */}
-            {workoutMode === 'structured' && (
-              <div className="rounded-xl p-4" style={{ background: 'var(--surface2)', border: `1px solid ${COACH_COLOR}33` }}>
-                <WorkoutBuilder value={workoutSteps} onChange={setWorkoutSteps} sport={sport} />
-                {/* Optional extra instructions */}
-                <div className="mt-4 pt-4 border-t" style={{ borderColor: 'var(--border)' }}>
-                  <label className="text-[10px] font-bold uppercase tracking-widest mb-1.5 block" style={{ color: 'var(--text3)' }}>
-                    Instructions complémentaires <span style={{ fontWeight: 400 }}>(optionnel)</span>
-                  </label>
-                  <textarea value={instructions} onChange={e => setInstructions(e.target.value)}
-                    placeholder="Consignes supplémentaires, points d'attention..."
-                    rows={2} className="w-full px-3 py-2 rounded-xl text-xs text-white outline-none resize-none"
-                    style={{ background: 'var(--surface)', border: '1px solid var(--border)' }} />
+            {blocks.length === 0 ? (
+              <div className="rounded-xl p-4 text-center" style={{ background: 'var(--surface2)', border: '1px dashed var(--border)' }}>
+                <p className="text-xs mb-3" style={{ color: 'var(--text3)' }}>
+                  Aucun bloc. Ajoute l'échauffement, le travail, la récup… chacun avec son commentaire.
+                </p>
+                <div className="flex gap-1.5 flex-wrap justify-center">
+                  {BLOCK_TYPES.map(t => (
+                    <button key={t.id} onClick={() => addBlock(t.id)}
+                      className="px-2.5 py-1 rounded-lg text-[11px] font-medium"
+                      style={{ background: 'var(--surface)', color: 'var(--text2)', border: '1px solid var(--border)' }}>
+                      + {t.emoji} {t.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2.5">
+                {blocks.map((b, i) => {
+                  const m = BLOCK_META[b.type] || BLOCK_META.other
+                  return (
+                    <div key={i} className="rounded-xl p-3 flex flex-col gap-2"
+                      style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }}>
+                      {/* Ligne 1 : type · durée · zone · déplacer · suppr */}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <select value={b.type} onChange={e => updateBlock(i, { type: e.target.value })}
+                          className="text-xs font-bold outline-none rounded-lg px-2 py-1.5 flex-shrink-0"
+                          style={{ background: 'var(--surface)', color: 'var(--text2)', border: '1px solid var(--border)', colorScheme: 'dark' }}>
+                          {BLOCK_TYPES.map(t => <option key={t.id} value={t.id}>{t.emoji} {t.label}</option>)}
+                        </select>
+                        <div className="flex items-center gap-1">
+                          <input type="number" value={b.duration} onChange={e => updateBlock(i, { duration: e.target.value })}
+                            placeholder="min" min={1} max={480}
+                            className="w-16 px-2 py-1.5 rounded-lg text-xs text-white outline-none font-mono text-center"
+                            style={{ background: 'var(--surface)', border: '1px solid var(--border)' }} />
+                          <span className="text-[10px]" style={{ color: 'var(--text3)' }}>min</span>
+                        </div>
+                        {sportM?.distUnit && (
+                          <div className="flex items-center gap-1">
+                            <input type="number" value={b.distance} onChange={e => updateBlock(i, { distance: e.target.value })}
+                              placeholder={sportM.distUnit} min={0}
+                              className="w-16 px-2 py-1.5 rounded-lg text-xs text-white outline-none font-mono text-center"
+                              style={{ background: 'var(--surface)', border: '1px solid var(--border)' }} />
+                            <span className="text-[10px]" style={{ color: 'var(--text3)' }}>{sportM.distUnit}</span>
+                          </div>
+                        )}
+                        <div className="flex gap-0.5">
+                          {ZONES.map(z => (
+                            <button key={z} onClick={() => updateBlock(i, { zone: b.zone === z ? '' : z })}
+                              className="w-7 h-7 rounded-lg text-[10px] font-bold transition-all"
+                              style={{
+                                background: b.zone === z ? (ZONE_COLORS[z] || '#fff') + '33' : 'var(--surface)',
+                                color:      b.zone === z ? (ZONE_COLORS[z] || '#fff') : 'var(--text3)',
+                                border:     `1px solid ${b.zone === z ? (ZONE_COLORS[z] || '#fff') + '66' : 'var(--border)'}`,
+                              }}>
+                              {z.replace('Z', '')}
+                            </button>
+                          ))}
+                        </div>
+                        <div className="flex items-center gap-1 ml-auto">
+                          <button onClick={() => moveBlock(i, -1)} disabled={i === 0}
+                            className="w-6 h-6 rounded flex items-center justify-center text-[9px] disabled:opacity-20"
+                            style={{ background: 'var(--surface)', color: 'var(--text3)' }}>▲</button>
+                          <button onClick={() => moveBlock(i, 1)} disabled={i === blocks.length - 1}
+                            className="w-6 h-6 rounded flex items-center justify-center text-[9px] disabled:opacity-20"
+                            style={{ background: 'var(--surface)', color: 'var(--text3)' }}>▼</button>
+                          <button onClick={() => removeBlock(i)}
+                            className="w-6 h-6 rounded flex items-center justify-center text-xs"
+                            style={{ background: 'rgba(239,68,68,0.1)', color: '#f87171' }}>✕</button>
+                        </div>
+                      </div>
+                      {/* Ligne 2 : nom court du bloc */}
+                      <input value={b.label} onChange={e => updateBlock(i, { label: e.target.value })}
+                        placeholder={`Nom du bloc (ex: ${m.label}, 5×1000m…)`}
+                        className="w-full px-3 py-1.5 rounded-lg text-xs text-white outline-none"
+                        style={{ background: 'var(--surface)', border: '1px solid var(--border)' }} />
+                      {/* Ligne 3 : commentaire / consignes du bloc */}
+                      <textarea value={b.instructions} onChange={e => updateBlock(i, { instructions: e.target.value })}
+                        placeholder="Commentaire / consignes de ce bloc (allure, sensations, technique…)"
+                        rows={2} className="w-full px-3 py-2 rounded-lg text-xs text-white outline-none resize-none"
+                        style={{ background: 'var(--surface)', border: '1px solid var(--border)' }} />
+                    </div>
+                  )
+                })}
+                <div className="flex gap-1.5 flex-wrap pt-1">
+                  <span className="text-[10px] self-center pr-1" style={{ color: 'var(--text3)' }}>+ Bloc :</span>
+                  {BLOCK_TYPES.map(t => (
+                    <button key={t.id} onClick={() => addBlock(t.id)}
+                      className="px-2 py-1 rounded-lg text-[10px] font-medium"
+                      style={{ background: 'var(--surface2)', color: 'var(--text2)', border: '1px solid var(--border)' }}>
+                      {t.emoji} {t.label}
+                    </button>
+                  ))}
                 </div>
               </div>
             )}
           </div>
 
-          {/* Note coach */}
+          {/* RPE + Conseil nutrition (lus par l'app) */}
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className="text-[10px] font-bold uppercase tracking-widest mb-1.5 block" style={{ color: 'var(--text3)' }}>RPE</label>
+              <input value={rpe} onChange={e => setRpe(e.target.value)} placeholder="ex: 7/10"
+                className="w-full px-3 py-2.5 rounded-xl text-sm text-white outline-none"
+                style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }} />
+            </div>
+            <div className="col-span-2">
+              <label className="text-[10px] font-bold uppercase tracking-widest mb-1.5 block" style={{ color: 'var(--text3)' }}>Conseil nutrition</label>
+              <input value={nutritionTip} onChange={e => setNutritionTip(e.target.value)} placeholder="ex: 1 gel toutes les 40 min"
+                className="w-full px-3 py-2.5 rounded-xl text-sm text-white outline-none"
+                style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }} />
+            </div>
+          </div>
+
+          {/* Note coach privée */}
           <div>
             <label className="text-[10px] font-bold uppercase tracking-widest mb-1.5 block" style={{ color: 'var(--text3)' }}>
-              Note coach privée <span style={{ fontWeight: 400 }}>(s'affiche sur la carte)</span>
+              Note coach <span style={{ fontWeight: 400 }}>(s'affiche sur la carte du builder)</span>
             </label>
             <textarea value={note} onChange={e => setNote(e.target.value)}
-              placeholder="Conseils techniques, focus de la séance..."
+              placeholder="Rappel perso, focus de la séance..."
               rows={2} className="w-full px-4 py-2.5 rounded-xl text-sm text-white outline-none resize-none"
               style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }} />
           </div>
 
-          {/* Récurrence — hidden when editing */}
+          {/* Récurrence — masquée en édition */}
           {!isEdit && (
             <div className="rounded-xl p-4" style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }}>
               <div className="flex items-center justify-between mb-3">
