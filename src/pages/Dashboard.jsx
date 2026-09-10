@@ -11,6 +11,7 @@ export default function Dashboard() {
   const navigate = useNavigate()
   const [athletes, setAthletes] = useState([])
   const [pending, setPending]   = useState([])
+  const [waiting, setWaiting]   = useState([]) // file d'attente générale (coach_waitlist)
   const [planMap, setPlanMap]   = useState({}) // athleteId → plan metadata
   const [loading, setLoading]   = useState(true)
 
@@ -30,6 +31,25 @@ export default function Dashboard() {
     const pendingAthletes = all.filter(r => r.status === 'pending')
     setAthletes(activeAthletes)
     setPending(pendingAthletes)
+
+    // File d'attente GÉNÉRALE (coach_waitlist) : personnes qui ont demandé « un coach »
+    // depuis l'app sans en choisir un précis. On exclut celles déjà liées à ce coach
+    // (demande directe en attente ou athlète actif) pour ne pas les afficher deux fois.
+    const linkedIds = new Set(all.map(r => r.athlete?.id).filter(Boolean))
+    const { data: wl } = await supabase
+      .from('coach_waitlist')
+      .select('user_id, status')
+      .eq('status', 'waiting')
+    const waitingIds = [...new Set((wl || []).map(r => r.user_id))].filter(uid => uid && !linkedIds.has(uid))
+    if (waitingIds.length > 0) {
+      const { data: profs } = await supabase
+        .from('profiles')
+        .select('id, full_name, email, photo_url')
+        .in('id', waitingIds)
+      setWaiting(profs || [])
+    } else {
+      setWaiting([])
+    }
 
     // Load plan metadata for all active athletes in one query
     if (activeAthletes.length > 0) {
@@ -61,6 +81,36 @@ export default function Dashboard() {
 
   async function decline(relationId) {
     await supabase.from('coach_athletes').delete().eq('id', relationId)
+    fetchAll()
+  }
+
+  // Accepter quelqu'un depuis la file d'attente générale : crée (ou réactive) la
+  // relation coach↔athlète en « active » puis marque sa ligne de file comme traitée.
+  // L'athlète apparaît ensuite dans « Mes athlètes » avec le bouton « Créer un programme ».
+  async function acceptFromWaitlist(athleteId) {
+    const { data: existing } = await supabase
+      .from('coach_athletes')
+      .select('id, status')
+      .eq('coach_id', coach.id)
+      .eq('athlete_id', athleteId)
+      .maybeSingle()
+    if (existing) {
+      if (existing.status !== 'active') {
+        await supabase.from('coach_athletes')
+          .update({ status: 'active', started_at: new Date().toISOString() })
+          .eq('id', existing.id)
+      }
+    } else {
+      await supabase.from('coach_athletes')
+        .insert({ coach_id: coach.id, athlete_id: athleteId, status: 'active', started_at: new Date().toISOString() })
+    }
+    await supabase.from('coach_waitlist').update({ status: 'approved' }).eq('user_id', athleteId)
+    fetchAll()
+  }
+
+  // Retirer quelqu'un de la file sans le prendre (il pourra re-rejoindre depuis l'app).
+  async function dismissFromWaitlist(athleteId) {
+    await supabase.from('coach_waitlist').delete().eq('user_id', athleteId)
     fetchAll()
   }
 
@@ -99,6 +149,50 @@ export default function Dashboard() {
                   <button onClick={() => accept(id)}
                     className="px-3 py-1.5 rounded-lg text-xs font-semibold text-white"
                     style={{ background: 'var(--red)' }}>
+                    Accepter ✓
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* File d'attente générale : personnes qui veulent un coach (app → coach_waitlist) */}
+      {waiting.length > 0 && (
+        <div className="mb-10">
+          <div className="flex items-center gap-2 mb-1">
+            <h2 className="text-lg font-bold text-white">En attente de coaching</h2>
+            <span className="w-5 h-5 rounded-full text-xs font-bold flex items-center justify-center text-white" style={{ background: COACH_COLOR }}>
+              {waiting.length}
+            </span>
+          </div>
+          <p className="text-xs mb-4" style={{ color: 'var(--text3)' }}>
+            Ces athlètes ont demandé un coach depuis l'app. Accepte-les pour leur créer un programme.
+          </p>
+          <div className="flex flex-col gap-3">
+            {waiting.map(athlete => (
+              <div key={athlete.id} className="rounded-2xl p-4 flex items-center gap-4"
+                style={{ background: 'var(--surface)', border: `1px solid ${COACH_COLOR}44` }}>
+                {athlete.photo_url
+                  ? <img src={athlete.photo_url} alt="" className="w-11 h-11 rounded-full object-cover flex-shrink-0" />
+                  : <div className="w-11 h-11 rounded-full flex items-center justify-center font-bold text-white flex-shrink-0" style={{ background: COACH_COLOR }}>
+                      {athlete.full_name?.[0]?.toUpperCase() || '?'}
+                    </div>
+                }
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-white text-sm truncate">{athlete.full_name || 'Athlète'}</p>
+                  <p className="text-xs truncate" style={{ color: 'var(--text3)' }}>{athlete.email}</p>
+                </div>
+                <div className="flex gap-2 flex-shrink-0">
+                  <button onClick={() => dismissFromWaitlist(athlete.id)}
+                    className="px-3 py-1.5 rounded-lg text-xs font-semibold"
+                    style={{ background: 'rgba(255,255,255,0.06)', color: 'var(--text3)' }}>
+                    Ignorer
+                  </button>
+                  <button onClick={() => acceptFromWaitlist(athlete.id)}
+                    className="px-3 py-1.5 rounded-lg text-xs font-semibold text-white"
+                    style={{ background: COACH_COLOR }}>
                     Accepter ✓
                   </button>
                 </div>
