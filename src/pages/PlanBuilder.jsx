@@ -13,6 +13,14 @@ import { toLocalDateStr, nextMonday, parseDate } from '../lib/dateUtils'
 
 const COACH_COLOR = '#22C5D5'
 
+// Lit les semaines d'un plan athlète (JSONB → tableau ; parfois stocké en chaîne JSON).
+function parsePlanWeeks(plan) {
+  if (!plan) return []
+  let w = plan.weeks
+  if (typeof w === 'string') { try { w = JSON.parse(w) } catch { return [] } }
+  return Array.isArray(w) ? w : []
+}
+
 // ─── Mini TSS bar chart ───────────────────────────────────────────────────────
 function LoadChart({ weeks, selectedWeek, onSelect }) {
   if (!weeks.length) return null
@@ -264,6 +272,53 @@ export default function PlanBuilder() {
     const base = new Date(meta.startDate + 'T12:00:00')
     base.setDate(base.getDate() + weekIdx * 7)
     return base
+  }
+
+  // Importe le plan actif de l'athlète comme base éditable : reprend ses semaines et
+  // séances telles quelles (dates, sports, durées, TSS, blocs…). Le coach ajuste ensuite
+  // chaque séance. Copie non destructive : ne modifie pas le plan de l'athlète tant qu'on
+  // n'a pas cliqué « Publier ». Aligne aussi la date de début sur le plan importé.
+  function importCurrentPlan() {
+    const srcWeeks = parsePlanWeeks(athletePlan)
+    if (srcWeeks.length === 0) {
+      setError("Cet athlète n'a pas de plan actif à importer.")
+      return
+    }
+    if (weeks.some(w => w.sessions?.length > 0) &&
+        !window.confirm("Remplacer le contenu actuel du builder par l'entraînement importé ?")) return
+
+    const imported = srcWeeks.map((w, i) => {
+      const sessions = (Array.isArray(w.sessions) ? w.sessions : []).map((s, j) => ({
+        ...s, // conserve blocks, type, rpe, nutritionTip, label_en… pour ne rien perdre
+        id: s.id || `import-${Date.now()}-${i}-${j}`,
+        sport: s.sport || 'run',
+        label: s.label || '',
+        duration: s.duration || 0,
+        distance: s.distance ?? null,
+        tss: s.tss || 0,
+        done: false,
+      }))
+      const actualTSS = sessions.reduce((a, s) => a + (s.tss || 0), 0)
+      const phaseRaw = String(w.phase || 'BASE').toUpperCase()
+      const phase = PHASES.includes(phaseRaw) ? phaseRaw : 'BASE'
+      const isRecovery = w.isRecovery ?? w.isBufferWeek ?? false
+      return {
+        weekNum:    w.weekNum ?? i + 1,
+        phase,
+        isRecovery,
+        weekStart:  w.weekStart || toLocalDateStr(getWeekStartDate(i)),
+        targetTSS:  w.targetTSS || weekTSSTarget(phase, isRecovery, meta.level) || actualTSS,
+        actualTSS,
+        note:       w.note || '',
+        sessions,
+      }
+    })
+
+    setWeeks(imported)
+    setSelectedWeek(0)
+    setError(null)
+    const firstStart = athletePlan?.start_date || imported[0]?.weekStart
+    if (firstStart) setMeta(m => ({ ...m, startDate: firstStart }))
   }
 
   function addWeek() {
@@ -588,6 +643,19 @@ export default function PlanBuilder() {
               style={{ background:'var(--red)' }}>
               ⚡ Générer les semaines automatiquement
             </button>
+
+            {!editingPlanId && parsePlanWeeks(athletePlan).length > 0 && (
+              <>
+                <button onClick={importCurrentPlan}
+                  className="w-full py-2 rounded-xl text-xs font-bold"
+                  style={{ background:'transparent', border:`1px solid ${COACH_COLOR}`, color:COACH_COLOR }}>
+                  ⬇ Importer l'entraînement actuel ({parsePlanWeeks(athletePlan).length} sem.)
+                </button>
+                <p className="text-[10px] leading-snug" style={{ color:'var(--text3)' }}>
+                  Repart du plan actuel de l'athlète comme base, puis modifie chaque séance à ta guise.
+                </p>
+              </>
+            )}
           </div>
 
           {/* Load chart */}
