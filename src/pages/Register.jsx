@@ -49,6 +49,14 @@ export default function Register() {
     })
     if (authErr) { setError(authErr.message); setLoading(false); return }
 
+    // Supabase répond sans erreur (anti-enumeration) même si l'email existe
+    // déjà — identities vide = compte déjà existant, aucun email ne part.
+    if (authData.user?.identities?.length === 0) {
+      setError('Un compte existe déjà avec cet email. Va sur la page de connexion (et utilise "Mot de passe oublié ?" si besoin).')
+      setLoading(false)
+      return
+    }
+
     const userId = authData.user?.id
     if (!userId) { setError('Erreur lors de la création du compte.'); setLoading(false); return }
 

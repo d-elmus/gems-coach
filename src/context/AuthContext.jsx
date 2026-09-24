@@ -88,6 +88,29 @@ export function AuthProvider({ children }) {
     return { error: null }
   }
 
+  // ── Mot de passe oublié (OTP) ─────────────────────────────────────────────
+  async function sendPasswordResetOtp(email) {
+    const { error } = await supabase.auth.signInWithOtp({
+      email: email.trim(),
+      options: { shouldCreateUser: false },
+    })
+    return { error }
+  }
+
+  async function resetPasswordWithOtp(email, token, newPassword) {
+    const { error: verifyErr } = await supabase.auth.verifyOtp({
+      email: email.trim(),
+      token: token.trim(),
+      type: 'email',
+    })
+    if (verifyErr) return { error: verifyErr }
+    const { error: pwErr } = await supabase.auth.updateUser({ password: newPassword })
+    if (pwErr) return { error: pwErr }
+    const { data: { user } } = await supabase.auth.getUser()
+    if (user) await resolveCoach(user.id)
+    return { error: null }
+  }
+
   async function signOut() {
     await supabase.auth.signOut()
     setCoach(null)
@@ -106,7 +129,10 @@ export function AuthProvider({ children }) {
   }
 
   return (
-    <AuthContext.Provider value={{ coach, hasSession, loading, signIn, signOut, updateCoach, claimCoachCode, confirmSignupOtp }}>
+    <AuthContext.Provider value={{
+      coach, hasSession, loading, signIn, signOut, updateCoach, claimCoachCode, confirmSignupOtp,
+      sendPasswordResetOtp, resetPasswordWithOtp,
+    }}>
       {children}
     </AuthContext.Provider>
   )
