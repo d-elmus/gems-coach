@@ -114,16 +114,18 @@ export const SESSION_PRESETS = {
   ],
 }
 
+// Couleurs = tokens --swim/--bike/... de index.css (palette validée daltonisme).
 export const SPORT_META = {
-  swim:     { label: 'Natation',  emoji: '🏊', color: '#0BBCD4', distUnit: 'm'  },
-  bike:     { label: 'Vélo',     emoji: '🚴', color: '#F59E0B', distUnit: 'km' },
-  run:      { label: 'Course',   emoji: '🏃', color: '#EF4444', distUnit: 'km' },
-  brick:    { label: 'Brick',    emoji: '🔗', color: '#8B5CF6', distUnit: 'km' },
-  strength: { label: 'Renfo',    emoji: '💪', color: '#10B981', distUnit: null },
+  swim:     { label: 'Natation', emoji: '🏊', color: '#0E9AAE', distUnit: 'm'  },
+  bike:     { label: 'Vélo',     emoji: '🚴', color: '#C9731A', distUnit: 'km' },
+  run:      { label: 'Course',   emoji: '🏃', color: '#A0407A', distUnit: 'km' },
+  brick:    { label: 'Enchaîné', emoji: '🔗', color: '#2F8F3E', distUnit: 'km' },
+  strength: { label: 'Renfo',    emoji: '💪', color: '#6B4FB0', distUnit: null },
 }
 
+// Intensité croissante, toujours affichée avec son libellé « Z1…Z5 ».
 export const ZONE_COLORS = {
-  Z1: '#7DF9FF', Z2: '#00FA9A', Z3: '#FF7F50', Z4: '#FF1493', Z5: '#9D00FF',
+  Z1: '#4F86A6', Z2: '#2F8F3E', Z3: '#C9731A', Z4: '#B3261E', Z5: '#6E0F1B',
 }
 
 export const DISCIPLINES = [
@@ -133,10 +135,19 @@ export const DISCIPLINES = [
 
 export const PHASES = ['PREP','BASE','BUILD','RACE_SPEC','PEAK','TAPER']
 export const PHASE_COLORS = {
-  PREP:'#B52E38', BASE:'#0A9DAB', BUILD:'#D9541A',
-  RACE_SPEC:'#8B1A1A', PEAK:'#C0392B', TAPER:'#1E8449',
+  PREP:'#4F86A6', BASE:'#0E9AAE', BUILD:'#C9731A',
+  RACE_SPEC:'#A0407A', PEAK:'#9E1B2B', TAPER:'#2F8F3E',
+}
+export const PHASE_LABELS = {
+  PREP:'Préparation', BASE:'Foncier', BUILD:'Développement',
+  RACE_SPEC:'Spécifique', PEAK:'Affûtage', TAPER:'Relâchement',
+}
+export const LEVEL_LABELS = { beginner:'Débutant', intermediate:'Intermédiaire', advanced:'Avancé', expert:'Expert' }
+export const DISCIPLINE_LABELS = {
+  sprint:'Triathlon S', olympique:'Triathlon M', halfIronman:'Half Ironman (L)', ironman:'Ironman (XL)', triathlon:'Triathlon',
+  run5k:'5 km', run10k:'10 km', semi:'Semi-marathon', marathon:'Marathon', bike:'Vélo', swim:'Natation',
 }
 export const LEVELS = ['beginner','intermediate','advanced','expert']
 export const DAYS_SHORT = ['Lun','Mar','Mer','Jeu','Ven','Sam','Dim']
 
-export const COACH_COLOR = '#22C5D5'
+export const COACH_COLOR = '#9E1B2B'

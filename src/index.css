@@ -1,31 +1,132 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,700;1,800&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&display=swap');
-
+/* ── DA GEMS : palette chaude (identique à l'app iOS, GEMSTheme.swift) ── */
 :root {
-  --bg: #0D0D14;
-  --surface: #14141E;
-  --surface2: #1C1C2A;
-  --border: rgba(255,255,255,0.08);
-  --red: #931621;
-  --red-dark: #6B0F18;
-  --cyan: #22C5D5;
-  --text1: #FFFFFF;
-  --text2: rgba(255,255,255,0.7);
-  --text3: rgba(255,255,255,0.4);
+  --bg: #F1ECE4;
+  --surface: #FFFFFF;
+  --surface2: #F6F2EB;
+  --surface3: #EEE8DE;
+  --border: #E4DBCD;
+  --border-strong: #D5C8B6;
+
+  --red: #9E1B2B;
+  --red-dark: #6E0F1B;
+  --red-deep: #3A070E;
+  --red-soft: #F6E3E3;
+
+  --text1: #1A1410;
+  --text2: #5C4E3A;
+  --text3: #9A8B72;
+
+  --good: #2F7A3E;
+  --good-soft: #E3F1E4;
+  --warn: #B4610F;
+  --warn-soft: #FBEBD6;
+  --bad: #B3261E;
+  --bad-soft: #FBE3E1;
+
+  /* Couleurs sport — palette validée (daltonisme + contraste) */
+  --swim: #0E9AAE;
+  --bike: #C9731A;
+  --run: #A0407A;
+  --brick: #2F8F3E;
+  --strength: #6B4FB0;
+
+  --shadow: 0 1px 2px rgba(58, 7, 14, 0.04), 0 8px 24px rgba(58, 7, 14, 0.05);
+  --shadow-lg: 0 18px 48px rgba(58, 7, 14, 0.14);
+  --radius: 20px;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
+html, body, #root { height: 100%; }
 body {
   background: var(--bg);
   color: var(--text1);
-  font-family: 'DM Sans', system-ui, sans-serif;
+  font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
+  font-size: 14px;
+}
+button { font-family: inherit; cursor: pointer; }
+input, textarea, select { font-family: inherit; color: var(--text1); }
+::selection { background: var(--red-soft); }
+
+@layer components {
+  /* Titres « GEMS » : gras + italique, comme la marque */
+  .display { font-weight: 800; font-style: italic; letter-spacing: -0.02em; }
+  .eyebrow { font-size: 11px; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase; color: var(--red); }
+  .page-title { font-size: 30px; font-weight: 800; letter-spacing: -0.02em; color: var(--text1); line-height: 1.1; }
+  .muted { color: var(--text3); }
+  .ink2 { color: var(--text2); }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); }
+  .card-soft { background: var(--surface2); border: 1px solid var(--border); border-radius: 16px; }
+  .card-title { font-size: 16px; font-weight: 800; color: var(--text1); }
+
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 42px; padding: 0 18px;
+         border-radius: 999px; font-weight: 700; font-size: 14px; transition: transform .12s, opacity .15s, background .15s; white-space: nowrap; }
+  .btn:active { transform: scale(0.98); }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn-primary { background: linear-gradient(180deg, #B02133, var(--red)); color: #fff; box-shadow: 0 8px 20px rgba(158, 27, 43, 0.28); }
+  .btn-primary:hover:not(:disabled) { background: var(--red-dark); }
+  .btn-ghost { background: var(--surface); color: var(--text1); border: 1px solid var(--border); }
+  .btn-ghost:hover:not(:disabled) { background: var(--surface2); }
+  .btn-soft { background: var(--red-soft); color: var(--red); }
+  .btn-soft:hover:not(:disabled) { background: #F0D3D5; }
+  .btn-sm { height: 34px; padding: 0 14px; font-size: 13px; }
+  .btn-icon { width: 42px; padding: 0; border-radius: 999px; }
+
+  .input { width: 100%; height: 44px; padding: 0 14px; border-radius: 14px; background: var(--surface); border: 1px solid var(--border);
+           outline: none; font-size: 14px; transition: border-color .15s, box-shadow .15s; }
+  .input:focus { border-color: var(--red); box-shadow: 0 0 0 3px rgba(158, 27, 43, 0.12); }
+  textarea.input { height: auto; padding: 12px 14px; resize: vertical; }
+  select.input { appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239A8B72' stroke-width='2.5'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+                 background-repeat: no-repeat; background-position: right 14px center; padding-right: 36px; }
+  .label { display: block; font-size: 12px; font-weight: 700; color: var(--text2); margin-bottom: 6px; }
+
+  .pill { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border-radius: 999px; font-size: 12px; font-weight: 700; white-space: nowrap; }
+  .pill-good { background: var(--good-soft); color: var(--good); }
+  .pill-warn { background: var(--warn-soft); color: var(--warn); }
+  .pill-bad  { background: var(--bad-soft); color: var(--bad); }
+  .pill-red  { background: var(--red-soft); color: var(--red); }
+  .pill-neutral { background: var(--surface3); color: var(--text2); }
+
+  .chip { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 14px; border-radius: 999px; font-size: 13px; font-weight: 600;
+          background: var(--surface); border: 1px solid var(--border); color: var(--text2); transition: all .15s; }
+  .chip:hover { border-color: var(--border-strong); }
+  .chip-on { background: var(--red); border-color: var(--red); color: #fff; }
+
+  .tab { padding: 10px 2px; font-weight: 700; font-size: 14px; color: var(--text3); border-bottom: 2px solid transparent; }
+  .tab-on { color: var(--red); border-color: var(--red); }
+
+  .table { width: 100%; border-collapse: collapse; }
+  .table th { text-align: left; font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--text3); padding: 14px 16px; }
+  .table td { padding: 14px 16px; border-top: 1px solid var(--border); }
+  .table tbody tr { transition: background .12s; }
+  .table tbody tr:hover { background: var(--surface2); }
+
+  /* Sidebar bordeaux à rayures diagonales */
+  .sidebar-bg {
+    background:
+      repeating-linear-gradient(115deg, rgba(255,255,255,0.035) 0 2px, transparent 2px 22px),
+      linear-gradient(180deg, #A81E30 0%, #7A1020 38%, #3A070E 100%);
+  }
+  .hero-bg {
+    background:
+      repeating-linear-gradient(115deg, rgba(255,255,255,0.05) 0 2px, transparent 2px 22px),
+      linear-gradient(135deg, #B02133 0%, #7A1020 60%, #4A0912 100%);
+  }
 }
 
 @keyframes slideInRight {
   from { opacity: 0; transform: translateX(110%); }
   to   { opacity: 1; transform: translateX(0); }
 }
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.fade-up { animation: fadeUp .25s ease-out both; }

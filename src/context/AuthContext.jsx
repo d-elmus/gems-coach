@@ -32,6 +32,11 @@ export function AuthProvider({ children }) {
     if (!data || (data.role !== 'coach' && data.role !== 'admin')) {
       data = await finalizeCoachSignup(userId)
     }
+    // Coach invité par un club (sans code GEMS) : l'invitation le promeut coach.
+    if (!data || (data.role !== 'coach' && data.role !== 'admin')) {
+      const { data: n } = await supabase.rpc('claim_club_invites')
+      if (n > 0) ({ data } = await supabase.from('profiles').select('*').eq('id', userId).single())
+    }
     if (!data || (data.role !== 'coach' && data.role !== 'admin')) {
       setCoach(null)
       return null

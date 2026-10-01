@@ -1,56 +1,100 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import { NotificationsProvider } from './context/NotificationsContext'
+import { ClubProvider, useClub } from './context/ClubContext'
 import Layout from './components/Layout'
+import { Spinner, Page, SetupNotice } from './components/ui'
 import Login from './pages/Login'
 import Register from './pages/Register'
-import Dashboard from './pages/Dashboard'
-import AthleteDetail from './pages/AthleteDetail'
-import AthleteDetailPlans from './pages/AthleteDetailPlans'
-import AthletePlan from './pages/AthletePlan'
-import PlanBuilder from './pages/PlanBuilder'
 import { MessagesList, Conversation } from './pages/Messages'
-import CoachProfile from './pages/CoachProfile'
+import CoachDashboard from './pages/coach/CoachDashboard'
+import Athletes from './pages/coach/Athletes'
+import AthleteDetail from './pages/coach/AthleteDetail'
+import PlanBuilder from './pages/coach/PlanBuilder'
+import Agenda from './pages/coach/Agenda'
+import Plans from './pages/coach/Plans'
+import Settings from './pages/coach/Settings'
+import ClubDashboard from './pages/club/ClubDashboard'
+import Members from './pages/club/Members'
+import Coaches from './pages/club/Coaches'
+import Planning from './pages/club/Planning'
+import Subscription from './pages/club/Subscription'
+import ClubSettings from './pages/club/ClubSettings'
+import CreateClub from './pages/club/CreateClub'
 import './index.css'
 
 function PrivateRoute({ children }) {
   const { coach, loading } = useAuth()
-  if (loading) return (
-    <div className="min-h-screen flex items-center justify-center" style={{ background: 'var(--bg)' }}>
-      <div className="w-8 h-8 rounded-full border-2 animate-spin" style={{ borderColor: 'rgba(147,22,33,0.2)', borderTopColor: '#931621' }} />
-    </div>
-  )
+  const club = useClub()
+  if (loading || (coach && club.loading)) return <div className="h-screen flex items-center justify-center"><Spinner /></div>
   if (!coach) return <Navigate to="/login" replace />
   if (coach.role !== 'coach' && coach.role !== 'admin') return (
-    <div className="min-h-screen flex items-center justify-center" style={{ background: 'var(--bg)' }}>
-      <div className="text-center px-6">
-        <p className="text-white font-semibold mb-2">Accès non autorisé</p>
-        <p className="text-sm" style={{ color: 'var(--text3)' }}>Ce portail est réservé aux coachs GEMS.</p>
+    <div className="h-screen flex items-center justify-center text-center px-6">
+      <div>
+        <p className="font-extrabold text-lg mb-1">Accès non autorisé</p>
+        <p className="text-sm muted">Ce portail est réservé aux coachs et aux clubs GEMS.</p>
       </div>
     </div>
   )
   return <Layout>{children}</Layout>
 }
 
+// Pages de l'espace club : réservées aux admins d'un club.
+function ClubRoute({ children, needsAdmin = true }) {
+  const { club, isAdmin, setupNeeded } = useClub()
+  if (setupNeeded) return <Page><SetupNotice /></Page>
+  if (!club) return <Navigate to="/club/new" replace />
+  if (needsAdmin && !isAdmin) return <Navigate to="/" replace />
+  return children
+}
+
+// Accueil : tableau de bord club pour un admin en espace club, sinon tableau de bord coach.
+function Home() {
+  const { space, isAdmin, club } = useClub()
+  if (club && isAdmin && space === 'club') return <Navigate to="/club" replace />
+  return <CoachDashboard />
+}
+
+const P = el => <PrivateRoute>{el}</PrivateRoute>
+
 export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <NotificationsProvider>
-        <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route path="/register" element={<Register />} />
-          <Route path="/" element={<PrivateRoute><Dashboard /></PrivateRoute>} />
-          <Route path="/athletes/:id" element={<PrivateRoute><AthleteDetail /></PrivateRoute>} />
-          <Route path="/athletes/:id/plan" element={<PrivateRoute><AthletePlan /></PrivateRoute>} />
-          <Route path="/athletes/:id/plans" element={<PrivateRoute><AthleteDetailPlans /></PrivateRoute>} />
-          <Route path="/athletes/:id/builder" element={<PrivateRoute><PlanBuilder /></PrivateRoute>} />
-          <Route path="/messages" element={<PrivateRoute><MessagesList /></PrivateRoute>} />
-          <Route path="/messages/:id" element={<PrivateRoute><Conversation /></PrivateRoute>} />
-          <Route path="/profile" element={<PrivateRoute><CoachProfile /></PrivateRoute>} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-        </NotificationsProvider>
+        <ClubProvider>
+          <NotificationsProvider>
+            <Routes>
+              <Route path="/login" element={<Login />} />
+              <Route path="/register" element={<Register />} />
+
+              {/* Espace coach */}
+              <Route path="/" element={P(<Home />)} />
+              <Route path="/athletes" element={P(<Athletes />)} />
+              <Route path="/athletes/:id" element={P(<AthleteDetail />)} />
+              <Route path="/athletes/:id/builder" element={P(<PlanBuilder />)} />
+              <Route path="/agenda" element={P(<ClubRoute needsAdmin={false}><Agenda /></ClubRoute>)} />
+              <Route path="/plans" element={P(<Plans />)} />
+              <Route path="/messages" element={P(<MessagesList />)} />
+              <Route path="/messages/:id" element={P(<Conversation />)} />
+              <Route path="/settings" element={P(<Settings />)} />
+
+              {/* Espace club */}
+              <Route path="/club" element={P(<ClubRoute><ClubDashboard /></ClubRoute>)} />
+              <Route path="/club/members" element={P(<ClubRoute><Members /></ClubRoute>)} />
+              <Route path="/club/coaches" element={P(<ClubRoute><Coaches /></ClubRoute>)} />
+              <Route path="/club/planning" element={P(<ClubRoute><Planning /></ClubRoute>)} />
+              <Route path="/club/subscription" element={P(<ClubRoute><Subscription /></ClubRoute>)} />
+              <Route path="/club/settings" element={P(<ClubRoute><ClubSettings /></ClubRoute>)} />
+              <Route path="/club/new" element={P(<CreateClub />)} />
+
+              {/* Anciennes URLs */}
+              <Route path="/profile" element={<Navigate to="/settings" replace />} />
+              <Route path="/athletes/:id/plan" element={<Navigate to=".." relative="path" replace />} />
+              <Route path="/athletes/:id/plans" element={<Navigate to=".." relative="path" replace />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </NotificationsProvider>
+        </ClubProvider>
       </AuthProvider>
     </BrowserRouter>
   )

@@ -1,27 +1,7 @@
 import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-
-function Shell({ title, subtitle, children }) {
-  return (
-    <div className="min-h-screen flex items-center justify-center px-4" style={{ background: 'var(--bg)' }}>
-      <div className="w-full max-w-sm">
-        <div className="flex items-center gap-3 mb-10">
-          <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: 'var(--red)' }}>
-            <span className="text-white font-bold text-lg">G</span>
-          </div>
-          <div>
-            <p className="text-white font-bold text-lg leading-none">GEMS</p>
-            <p className="text-xs" style={{ color: 'var(--text3)' }}>Coach Portal</p>
-          </div>
-        </div>
-        <h1 className="text-2xl font-bold text-white mb-1">{title}</h1>
-        <p className="text-sm mb-8" style={{ color: 'var(--text3)' }}>{subtitle}</p>
-        {children}
-      </div>
-    </div>
-  )
-}
+import Shell from '../components/AuthShell'
 
 // Compte authentifié mais pas encore promu coach (email confirmé après une
 // inscription interrompue, code jamais saisi, etc.) : on lui laisse une
@@ -54,16 +34,14 @@ function ClaimCodeForm() {
           value={code}
           onChange={e => setCode(e.target.value)}
           required
-          className="w-full px-4 py-3 rounded-xl text-sm text-white outline-none"
-          style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }}
+          className="input"
           placeholder="GEMS-COACH-XXXXX"
         />
-        {error && <p className="text-sm text-red-400">{error}</p>}
+        {error && <p className="text-sm" style={{ color: 'var(--bad)' }}>{error}</p>}
         <button
           type="submit"
           disabled={loading}
-          className="w-full py-3 rounded-xl font-semibold text-white mt-2 transition-opacity"
-          style={{ background: 'var(--red)', opacity: loading ? 0.6 : 1 }}
+          className="btn btn-primary w-full mt-2"
         >
           {loading ? 'Activation...' : 'Activer mon compte coach'}
         </button>
@@ -104,16 +82,14 @@ function ConfirmEmailForm({ email }) {
           value={otp}
           onChange={e => setOtp(e.target.value)}
           required
-          className="w-full px-4 py-3 rounded-xl text-sm text-white outline-none text-center tracking-[0.3em]"
-          style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }}
+          className="input text-center tracking-[0.3em]"
           placeholder="000000"
         />
-        {error && <p className="text-sm text-red-400">{error}</p>}
+        {error && <p className="text-sm" style={{ color: 'var(--bad)' }}>{error}</p>}
         <button
           type="submit"
           disabled={loading}
-          className="w-full py-3 rounded-xl font-semibold text-white mt-2 transition-opacity"
-          style={{ background: 'var(--red)', opacity: loading ? 0.6 : 1 }}
+          className="btn btn-primary w-full mt-2"
         >
           {loading ? 'Vérification...' : 'Confirmer'}
         </button>
@@ -153,40 +129,37 @@ export default function Login() {
   if (!authLoading && hasSession && !coach) return <ClaimCodeForm />
 
   return (
-    <Shell title="Connexion" subtitle="Accès réservé aux coachs GEMS">
+    <Shell title="Connexion" subtitle="Espace coachs et clubs GEMS">
       <form onSubmit={handleSubmit} className="flex flex-col gap-4">
         <div>
-          <label className="text-xs font-semibold uppercase tracking-wider mb-1.5 block" style={{ color: 'var(--text3)' }}>Email</label>
+          <label className="label">Email</label>
           <input
             type="email"
             value={email}
             onChange={e => setEmail(e.target.value)}
             required
-            className="w-full px-4 py-3 rounded-xl text-sm text-white outline-none"
-            style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }}
+            className="input"
             placeholder="coach@example.com"
           />
         </div>
         <div>
-          <label className="text-xs font-semibold uppercase tracking-wider mb-1.5 block" style={{ color: 'var(--text3)' }}>Mot de passe</label>
+          <label className="label">Mot de passe</label>
           <input
             type="password"
             value={password}
             onChange={e => setPassword(e.target.value)}
             required
-            className="w-full px-4 py-3 rounded-xl text-sm text-white outline-none"
-            style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }}
+            className="input"
             placeholder="••••••••"
           />
         </div>
 
-        {error && <p className="text-sm text-red-400">{error}</p>}
+        {error && <p className="text-sm" style={{ color: 'var(--bad)' }}>{error}</p>}
 
         <button
           type="submit"
           disabled={loading}
-          className="w-full py-3 rounded-xl font-semibold text-white mt-2 transition-opacity"
-          style={{ background: 'var(--red)', opacity: loading ? 0.6 : 1 }}
+          className="btn btn-primary w-full mt-2"
         >
           {loading ? 'Connexion...' : 'Se connecter'}
         </button>
@@ -194,7 +167,7 @@ export default function Login() {
 
       <p className="text-center text-sm mt-6" style={{ color: 'var(--text3)' }}>
         Pas encore de compte ?{' '}
-        <Link to="/register" className="font-semibold" style={{ color: 'var(--cyan)' }}>
+        <Link to="/register" className="font-semibold" style={{ color: 'var(--red)' }}>
           S'inscrire
         </Link>
       </p>

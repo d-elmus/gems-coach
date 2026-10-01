@@ -1,166 +1,251 @@
-import { useEffect } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useNotifications } from '../context/NotificationsContext'
-import { COACH_COLOR } from '../lib/planHelpers'
+import { useClub } from '../context/ClubContext'
+import { Icon, Avatar, Mascot, Meter } from './ui'
 
+const CLUB_NAV = [
+  { to: '/club', label: 'Tableau de bord', icon: 'grid', end: true },
+  { to: '/club/members', label: 'Membres', icon: 'users' },
+  { to: '/club/coaches', label: 'Coachs', icon: 'whistle' },
+  { to: '/club/planning', label: 'Planning', icon: 'calendar' },
+  { to: '/club/subscription', label: 'Abonnement', icon: 'card' },
+  { to: '/club/settings', label: 'Réglages', icon: 'settings' },
+]
+const COACH_NAV = [
+  { to: '/', label: 'Tableau de bord', icon: 'grid', end: true },
+  { to: '/athletes', label: 'Mes athlètes', icon: 'users' },
+  { to: '/agenda', label: 'Mon agenda', icon: 'calendar', needsClub: true },
+  { to: '/plans', label: 'Plans', icon: 'list' },
+  { to: '/messages', label: 'Messages', icon: 'message', badge: true },
+  { to: '/settings', label: 'Réglages', icon: 'settings' },
+]
 
-// ─── Toast banner ─────────────────────────────────────────────────────────────
+// ─── Toasts messages ──────────────────────────────────────────────────────────
 function MessageToasts() {
   const { toasts, dismissToast } = useNotifications()
   const navigate = useNavigate()
-
   return (
-    <div className="fixed top-4 right-4 flex flex-col gap-2 pointer-events-none" style={{ zIndex: 99999, maxWidth: 340 }}>
-      {toasts.map(toast => (
-        <div
-          key={toast.id}
-          onClick={() => { navigate(`/messages/${toast.senderId}`); dismissToast(toast.id) }}
-          className="flex items-center gap-3 px-4 py-3.5 rounded-2xl cursor-pointer pointer-events-auto"
-          style={{
-            background: 'var(--surface)',
-            border: `1px solid ${COACH_COLOR}66`,
-            boxShadow: `0 12px 40px rgba(0,0,0,0.5), 0 0 0 1px ${COACH_COLOR}22`,
-            animation: 'slideInRight 0.25s cubic-bezier(0.34,1.56,0.64,1)',
-          }}
-        >
-          {/* Sender avatar */}
-          <div className="relative flex-shrink-0">
-            {toast.senderPhoto
-              ? <img src={toast.senderPhoto} alt="" className="w-10 h-10 rounded-full object-cover" />
-              : <div className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white"
-                  style={{ background: 'var(--red)' }}>
-                  {toast.senderName?.[0]?.toUpperCase()}
-                </div>
-            }
-            <div className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full border-2 flex items-center justify-center"
-              style={{ background: COACH_COLOR, borderColor: 'var(--surface)' }}>
-              <span style={{ fontSize: 7, color: '#fff', lineHeight: 1 }}>💬</span>
-            </div>
-          </div>
-          {/* Content */}
+    <div className="fixed top-5 right-5 flex flex-col gap-2 pointer-events-none" style={{ zIndex: 99999, maxWidth: 340 }}>
+      {toasts.map(t => (
+        <div key={t.id}
+          onClick={() => { navigate(`/messages/${t.senderId}`); dismissToast(t.id) }}
+          className="card flex items-center gap-3 px-4 py-3 cursor-pointer pointer-events-auto"
+          style={{ boxShadow: 'var(--shadow-lg)', animation: 'slideInRight 0.25s cubic-bezier(0.34,1.56,0.64,1)' }}>
+          <Avatar name={t.senderName} url={t.senderPhoto} id={t.senderId} size={38} />
           <div className="flex-1 min-w-0">
-            <p className="text-xs font-bold text-white mb-0.5">{toast.senderName}</p>
-            <p className="text-xs leading-snug" style={{ color: 'var(--text3)' }}>{toast.content}</p>
+            <p className="text-[13px] font-extrabold">{t.senderName}</p>
+            <p className="text-xs muted truncate">{t.content}</p>
           </div>
-          {/* Dismiss */}
-          <button
-            onClick={e => { e.stopPropagation(); dismissToast(toast.id) }}
-            className="w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0 text-xs hover:opacity-70"
-            style={{ background: 'var(--surface2)', color: 'var(--text3)' }}
-          >✕</button>
+          <button onClick={e => { e.stopPropagation(); dismissToast(t.id) }} className="muted hover:opacity-70" aria-label="Fermer">
+            <Icon name="x" size={14} />
+          </button>
         </div>
       ))}
     </div>
   )
 }
 
+// ─── Carte club (haut de sidebar) : bascule espace club / espace coach ────────
+function ClubCard() {
+  const { club, isAdmin, space, setSpace, memberCount, setupNeeded } = useClub()
+  const navigate = useNavigate()
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+
+  useEffect(() => {
+    const h = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', h)
+    return () => document.removeEventListener('mousedown', h)
+  }, [])
+
+  if (!club) {
+    return (
+      <button onClick={() => navigate('/club/new')}
+        className="w-full text-left rounded-2xl p-3 flex items-center gap-3 transition-colors hover:bg-white/15"
+        style={{ background: 'rgba(255,255,255,0.1)', border: '1px dashed rgba(255,255,255,0.35)' }}>
+        <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: 'rgba(255,255,255,0.15)' }}>
+          <Icon name="plus" size={18} />
+        </div>
+        <div className="min-w-0">
+          <p className="text-[13px] font-extrabold">Créer mon club</p>
+          <p className="text-[11px] opacity-70">{setupNeeded ? 'Espace club à activer' : 'Planning, membres, réservations'}</p>
+        </div>
+      </button>
+    )
+  }
+
+  const sub = space === 'club' ? `Espace club · ${memberCount} adhérent${memberCount > 1 ? 's' : ''}` : 'Espace coach'
+  return (
+    <div ref={ref} className="relative">
+      <button onClick={() => isAdmin && setOpen(o => !o)}
+        className="w-full text-left rounded-2xl p-3 flex items-center gap-3 transition-colors"
+        style={{ background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.18)', cursor: isAdmin ? 'pointer' : 'default' }}>
+        {club.logo_url
+          ? <img src={club.logo_url} alt="" className="w-10 h-10 rounded-full object-cover flex-shrink-0" />
+          : <Mascot size={40} />}
+        <div className="min-w-0 flex-1">
+          <p className="text-[13px] font-extrabold truncate">{club.name}</p>
+          <p className="text-[11px] opacity-75 truncate">{sub}</p>
+        </div>
+        {isAdmin && <Icon name="swap" size={15} className="opacity-70" />}
+      </button>
+      {open && (
+        <div className="absolute left-0 right-0 top-full mt-2 rounded-2xl p-1.5 z-20"
+          style={{ background: 'var(--surface)', boxShadow: 'var(--shadow-lg)', color: 'var(--text1)' }}>
+          {[
+            { id: 'club', label: 'Espace club', sub: 'Membres, coachs, planning', icon: 'shield', home: '/club' },
+            { id: 'coach', label: 'Espace coach', sub: 'Mes athlètes, plans, messages', icon: 'whistle', home: '/' },
+          ].map(o => (
+            <button key={o.id} onClick={() => { setSpace(o.id); setOpen(false); navigate(o.home) }}
+              className="w-full flex items-center gap-3 p-2.5 rounded-xl text-left hover:bg-[var(--surface2)]">
+              <div className="w-8 h-8 rounded-lg flex items-center justify-center"
+                style={{ background: space === o.id ? 'var(--red)' : 'var(--surface3)', color: space === o.id ? '#fff' : 'var(--text2)' }}>
+                <Icon name={o.icon} size={15} />
+              </div>
+              <div className="flex-1">
+                <p className="text-[13px] font-bold">{o.label}</p>
+                <p className="text-[11px] muted">{o.sub}</p>
+              </div>
+              {space === o.id && <Icon name="check" size={15} style={{ color: 'var(--red)' }} />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function PlanCard() {
+  const { club, memberCount } = useClub()
+  if (!club) return null
+  return (
+    <NavLink to="/club/subscription" className="block rounded-2xl p-4"
+      style={{ background: 'rgba(0,0,0,0.28)', border: '1px solid rgba(255,255,255,0.1)' }}>
+      <p className="text-[10px] font-extrabold tracking-[0.14em] opacity-70">FORMULE</p>
+      <p className="display text-[17px] mt-1 mb-3">GEMS Club Pro</p>
+      <Meter value={memberCount} max={club.seats} tone="light" height={5} />
+      <p className="text-[11px] opacity-75 mt-2">{memberCount} / {club.seats} licences</p>
+    </NavLink>
+  )
+}
+
+// ─── En-tête de page : titre + utilitaires (recherche, notifs, profil) ────────
+export function Header({ eyebrow, title, children, search = true }) {
+  const { coach, signOut } = useAuth()
+  const { unread } = useNotifications()
+  const { space, isAdmin } = useClub()
+  const navigate = useNavigate()
+  const [q, setQ] = useState('')
+  const [menu, setMenu] = useState(false)
+  const ref = useRef(null)
+
+  useEffect(() => {
+    const h = e => { if (ref.current && !ref.current.contains(e.target)) setMenu(false) }
+    document.addEventListener('mousedown', h)
+    return () => document.removeEventListener('mousedown', h)
+  }, [])
+
+  function submitSearch(e) {
+    e.preventDefault()
+    const target = space === 'club' ? '/club/members' : '/athletes'
+    navigate(`${target}?q=${encodeURIComponent(q.trim())}`)
+  }
+
+  return (
+    <div className="flex items-end justify-between gap-6 flex-wrap mb-7">
+      <div className="min-w-0">
+        {eyebrow && <p className="eyebrow mb-2">{eyebrow}</p>}
+        <h1 className="page-title">{title}</h1>
+      </div>
+      <div className="flex items-center gap-3 flex-wrap">
+        {children}
+        {search && (
+          <form onSubmit={submitSearch} className="relative hidden xl:block">
+            <Icon name="search" size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 muted" />
+            <input value={q} onChange={e => setQ(e.target.value)} placeholder="Rechercher…"
+              className="input" style={{ width: 220, paddingLeft: 38, borderRadius: 999 }} />
+          </form>
+        )}
+        <button onClick={() => navigate('/messages')} className="btn btn-ghost btn-icon relative" aria-label="Messages">
+          <Icon name="bell" size={17} />
+          {unread > 0 && <span className="absolute top-2 right-2.5 w-2.5 h-2.5 rounded-full" style={{ background: 'var(--red)', boxShadow: '0 0 0 2px var(--surface)' }} />}
+        </button>
+        <div ref={ref} className="relative">
+          <button onClick={() => setMenu(m => !m)} className="flex items-center gap-2.5 pl-1 pr-2 py-1 rounded-full hover:bg-[var(--surface)]">
+            <Avatar name={coach?.full_name} url={coach?.photo_url} id={coach?.id} size={38} />
+            <div className="text-left hidden lg:block">
+              <p className="text-[13px] font-extrabold leading-tight">{coach?.full_name || 'Coach'}</p>
+              <p className="text-[11px] muted">{space === 'club' && isAdmin ? 'Admin' : 'Coach'}</p>
+            </div>
+          </button>
+          {menu && (
+            <div className="absolute right-0 top-full mt-2 w-52 rounded-2xl p-1.5 z-30" style={{ background: 'var(--surface)', boxShadow: 'var(--shadow-lg)' }}>
+              <button onClick={() => { setMenu(false); navigate('/settings') }} className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-[13px] font-semibold hover:bg-[var(--surface2)]">
+                <Icon name="settings" size={15} /> Mon profil coach
+              </button>
+              <button onClick={async () => { await signOut(); navigate('/login') }} className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-[13px] font-semibold hover:bg-[var(--surface2)]" style={{ color: 'var(--bad)' }}>
+                <Icon name="logout" size={15} /> Se déconnecter
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Layout ───────────────────────────────────────────────────────────────────
 export default function Layout({ children }) {
-  const { coach, signOut } = useAuth()
   const { unread, clearUnread } = useNotifications()
-  const navigate = useNavigate()
+  const { space, club } = useClub()
   const location = useLocation()
 
-  // Clear unread when visiting the messages section
   useEffect(() => {
     if (location.pathname.startsWith('/messages')) clearUnread()
   }, [location.pathname])
 
-  async function handleSignOut() {
-    await signOut()
-    navigate('/login')
-  }
+  const nav = (space === 'club' ? CLUB_NAV : COACH_NAV).filter(n => !n.needsClub || club)
 
   return (
-    <div className="min-h-screen flex" style={{ background: 'var(--bg)' }}>
-      {/* Toast notifications */}
+    <div className="h-screen flex overflow-hidden">
       <MessageToasts />
 
-      {/* Sidebar */}
-      <aside className="w-56 flex-shrink-0 flex flex-col border-r" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
-        {/* Logo */}
-        <div className="px-5 py-6 border-b" style={{ borderColor: 'var(--border)' }}>
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: 'var(--red)' }}>
-              <span className="text-white font-bold text-sm">G</span>
-            </div>
-            <div>
-              <p className="text-white font-bold text-sm leading-none">GEMS</p>
-              <p className="text-[10px]" style={{ color: 'var(--text3)' }}>Coach Portal</p>
-            </div>
-          </div>
+      <aside className="sidebar-bg w-[256px] flex-shrink-0 flex flex-col text-white px-4 py-6 gap-6 overflow-y-auto">
+        <div className="px-3">
+          <p className="display text-[26px] leading-none">GEMS</p>
+          <p className="text-[9px] font-extrabold tracking-[0.3em] opacity-80 mt-1">TRIATHLON TEAM</p>
         </div>
 
-        {/* Nav */}
-        <nav className="flex-1 px-3 py-4 flex flex-col gap-1">
-          <NavLink
-            to="/"
-            end
-            className={({ isActive }) =>
-              `flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors ${isActive ? 'text-white' : 'hover:bg-white/5'}`
-            }
-            style={({ isActive }) => isActive ? { background: 'var(--red)', color: '#fff' } : { color: 'var(--text2)' }}
-          >
-            <span>👥</span>
-            Athlètes
-          </NavLink>
+        <ClubCard />
 
-          {/* Messages with unread badge */}
-          <NavLink
-            to="/messages"
-            className={({ isActive }) =>
-              `flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors ${isActive ? 'text-white' : 'hover:bg-white/5'}`
-            }
-            style={({ isActive }) => isActive ? { background: 'var(--red)', color: '#fff' } : { color: 'var(--text2)' }}
-          >
-            <span>💬</span>
-            <span className="flex-1">Messages</span>
-            {unread > 0 && (
-              <span className="min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold flex items-center justify-center text-white"
-                style={{ background: COACH_COLOR }}>
-                {unread > 99 ? '99+' : unread}
-              </span>
-            )}
-          </NavLink>
+        <nav className="flex flex-col gap-1">
+          {nav.map(n => (
+            <NavLink key={n.to} to={n.to} end={n.end}
+              className={({ isActive }) =>
+                `flex items-center gap-3 px-4 h-11 rounded-xl text-[14px] font-semibold transition-colors ${isActive ? '' : 'hover:bg-white/10'}`}
+              style={({ isActive }) => isActive
+                ? { background: 'var(--bg)', color: 'var(--red-dark)' }
+                : { color: 'rgba(255,255,255,0.88)' }}>
+              <Icon name={n.icon} size={18} />
+              <span className="flex-1">{n.label}</span>
+              {n.badge && unread > 0 && (
+                <span className="min-w-[20px] h-5 px-1.5 rounded-full text-[11px] font-extrabold flex items-center justify-center"
+                  style={{ background: '#fff', color: 'var(--red)' }}>
+                  {unread > 99 ? '99+' : unread}
+                </span>
+              )}
+            </NavLink>
+          ))}
         </nav>
 
-        {/* Coach profile */}
-        <div className="px-4 py-4 border-t" style={{ borderColor: 'var(--border)' }}>
-          <NavLink
-            to="/profile"
-            className="flex items-center gap-3 rounded-xl px-2 py-2 mb-2 transition-colors hover:bg-white/5 group"
-            style={{ textDecoration: 'none' }}
-          >
-            {coach?.photo_url ? (
-              <img src={coach.photo_url} alt="" className="w-8 h-8 rounded-full object-cover flex-shrink-0" />
-            ) : (
-              <div className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold text-white flex-shrink-0"
-                style={{ background: 'var(--red)' }}>
-                {coach?.full_name?.[0]?.toUpperCase() ?? '?'}
-              </div>
-            )}
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold text-white truncate leading-tight">{coach?.full_name || 'Coach'}</p>
-              <p className="text-xs truncate" style={{ color: 'var(--text3)' }}>{coach?.email}</p>
-            </div>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
-              className="flex-shrink-0 opacity-0 group-hover:opacity-60 transition-opacity" style={{ color: 'var(--text3)' }}>
-              <polyline points="9 18 15 12 9 6"/>
-            </svg>
-          </NavLink>
-          <button
-            onClick={handleSignOut}
-            className="text-xs font-medium px-3 py-1.5 rounded-lg w-full text-left transition-colors hover:bg-white/5"
-            style={{ color: 'var(--text3)' }}
-          >
-            Se déconnecter
-          </button>
+        <div className="mt-auto">
+          <PlanCard />
         </div>
       </aside>
 
-      {/* Main content */}
-      <main className="flex-1 overflow-auto">
+      <main className="flex-1 overflow-y-auto" style={{ background: 'var(--bg)' }}>
         {children}
       </main>
     </div>

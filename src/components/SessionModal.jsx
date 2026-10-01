@@ -1,450 +1,219 @@
-import { useState, useEffect } from 'react'
-import {
-  SPORT_META, SESSION_PRESETS, ZONE_COLORS, DAYS_SHORT,
-  getZoneTargets, COACH_COLOR,
-} from '../lib/planHelpers'
+import { useState } from 'react'
+import { SPORT_META, SESSION_PRESETS, DAYS_SHORT, getZoneTargets } from '../lib/planHelpers'
+import { Modal, Field, Icon, sportColor } from './ui'
 
-const ZONES = ['Z1','Z2','Z3','Z4','Z5']
+const ZONES = ['Z1', 'Z2', 'Z3', 'Z4', 'Z5']
 
 // Types de bloc = ceux que l'app athlète comprend (SessionBlock.type).
 const BLOCK_TYPES = [
-  { id: 'warmup',   label: 'Échauffement', emoji: '🔥' },
-  { id: 'work',     label: 'Travail',      emoji: '⚡' },
-  { id: 'recovery', label: 'Récupération', emoji: '🌀' },
-  { id: 'cooldown', label: 'Retour calme', emoji: '❄️' },
-  { id: 'other',    label: 'Autre',        emoji: '●'  },
+  { id: 'warmup', label: 'Échauffement' },
+  { id: 'work', label: 'Travail' },
+  { id: 'recovery', label: 'Récupération' },
+  { id: 'cooldown', label: 'Retour au calme' },
+  { id: 'other', label: 'Autre' },
 ]
-const BLOCK_META = Object.fromEntries(BLOCK_TYPES.map(b => [b.id, b]))
 
-// La zone d'un bloc peut arriver en nombre (4) ou en chaîne ("Z4") depuis l'app/web.
-// On normalise en "Z4" pour l'UI ; l'app relit indifféremment l'un ou l'autre.
+// La zone d'un bloc peut arriver en nombre (4) ou en chaîne ("Z4") : on normalise en "Z4".
 function zoneToStr(z) {
   if (z == null || z === '') return ''
   if (typeof z === 'number') return 'Z' + z
   const d = String(z).match(/\d/)
   return d ? 'Z' + d[0] : ''
 }
-
 // Reprend un bloc existant en préservant ses champs inconnus (target, instructions_en…).
 function normBlock(b = {}) {
-  return {
-    ...b,
-    type: b.type || 'work',
-    label: b.label || '',
-    instructions: b.instructions || '',
-    zone: zoneToStr(b.zone),
-    duration: b.duration ?? '',
-    distance: b.distance ?? '',
-  }
+  return { ...b, type: b.type || 'work', label: b.label || '', instructions: b.instructions || '', zone: zoneToStr(b.zone), duration: b.duration ?? '', distance: b.distance ?? '' }
+}
+function dayOf(dateStr) {
+  const d = new Date(dateStr + 'T12:00:00').getDay()
+  return d === 0 ? 6 : d - 1
 }
 
-function emptyBlock(type = 'work') {
-  return { type, label: '', instructions: '', zone: BLOCK_META[type] ? (type === 'work' ? 'Z4' : type === 'warmup' || type === 'recovery' || type === 'cooldown' ? 'Z1' : 'Z2') : '', duration: '', distance: '' }
-}
-
-export default function SessionModal({ weekStart, weekIdx, totalWeeks, athletePlan, onAdd, onClose, editSession }) {
-  const isEdit = !!editSession
-
-  const [sport, setSport]         = useState('run')
-  const [preset, setPreset]       = useState(null)
-  const [label, setLabel]         = useState('')
-  const [dayOfWeek, setDayOfWeek] = useState(0)
-  const [duration, setDuration]   = useState(45)
-  const [distance, setDistance]   = useState('')
-  const [zone, setZone]           = useState('Z2')
-  const [note, setNote]           = useState('')       // note coach privée (carte coach)
-  const [rpe, setRpe]             = useState('')        // RPE ressenti (lu par l'app)
-  const [nutritionTip, setNutritionTip] = useState('') // conseil nutrition (lu par l'app)
-  const [blocks, setBlocks]       = useState([])        // contenu détaillé (lu par l'app)
-  const [repeat, setRepeat]       = useState(1)
+export default function SessionModal({ weekIdx, totalWeeks, athletePlan, onAdd, onClose, editSession, initialDay = 0 }) {
+  const e = editSession
+  const [sport, setSport] = useState(e?.sport || 'run')
+  const [label, setLabel] = useState(e?.label || '')
+  const [dayOfWeek, setDayOfWeek] = useState(e?.date ? dayOf(e.date) : initialDay)
+  const [duration, setDuration] = useState(e?.duration || 45)
+  const [distance, setDistance] = useState(e?.distance ?? '')
+  const [zone, setZone] = useState(e?.zone || 'Z2')
+  const [note, setNote] = useState(e?.coachNote || '')
+  const [rpe, setRpe] = useState(e?.rpe || '')
+  const [nutritionTip, setNutritionTip] = useState(e?.nutritionTip || '')
+  const [blocks, setBlocks] = useState(Array.isArray(e?.blocks) ? e.blocks.map(normBlock) : [])
+  const [repeat, setRepeat] = useState(1)
   const [skipRecovery, setSkipRecovery] = useState(true)
+  const [more, setMore] = useState(!!(e?.rpe || e?.nutritionTip || e?.coachNote))
 
-  const zoneTarget = getZoneTargets(athletePlan, sport, zone)
-
-  // Pré-remplit tous les champs quand on édite une séance existante (dont une séance importée).
-  useEffect(() => {
-    if (!editSession) return
-    setSport(editSession.sport || 'run')
-    setLabel(editSession.label || '')
-    setDuration(editSession.duration || 45)
-    setDistance(editSession.distance != null ? editSession.distance : '')
-    setZone(editSession.zone || 'Z2')
-    setNote(editSession.coachNote || '')
-    setRpe(editSession.rpe || '')
-    setNutritionTip(editSession.nutritionTip || '')
-    setBlocks(Array.isArray(editSession.blocks) ? editSession.blocks.map(normBlock) : [])
-    if (editSession.date && weekStart) {
-      const d = new Date(editSession.date + 'T12:00:00')
-      const jsDay = d.getDay()
-      setDayOfWeek(jsDay === 0 ? 6 : jsDay - 1)
-    }
-  }, [editSession])
+  const target = getZoneTargets(athletePlan, sport, zone)
+  const sportM = SPORT_META[sport]
+  const maxRepeat = Math.max(1, totalWeeks - weekIdx)
+  const blocksMin = blocks.reduce((a, b) => a + (parseInt(b.duration) || 0), 0)
 
   function applyPreset(p) {
-    setPreset(p)
     setLabel(p.label)
     setDuration(p.duration)
-    setDistance(p.distance !== null ? p.distance : '')
+    setDistance(p.distance ?? '')
     if (p.zone) setZone(p.zone)
   }
-
-  // ── Manipulation des blocs ──
-  function addBlock(type = 'work') { setBlocks(prev => [...prev, emptyBlock(type)]) }
-  function updateBlock(i, patch)   { setBlocks(prev => prev.map((b, idx) => idx === i ? { ...b, ...patch } : b)) }
-  function removeBlock(i)          { setBlocks(prev => prev.filter((_, idx) => idx !== i)) }
+  function updateBlock(i, patch) { setBlocks(prev => prev.map((b, k) => k === i ? { ...b, ...patch } : b)) }
   function moveBlock(i, dir) {
     setBlocks(prev => {
-      const n = [...prev]
-      const j = i + dir
+      const n = [...prev], j = i + dir
       if (j < 0 || j >= n.length) return prev
       ;[n[i], n[j]] = [n[j], n[i]]
       return n
     })
   }
 
-  const presets = SESSION_PRESETS[sport] || []
-  const sportM  = SPORT_META[sport]
-  const maxRepeat = Math.max(1, totalWeeks - weekIdx)
-  const blocksTotalMin = blocks.reduce((a, b) => a + (parseInt(b.duration) || 0), 0)
-
-  function handleSubmit() {
-    const cleanBlocks = blocks.map(b => ({
-      ...b,
-      type: b.type || 'work',
-      label: b.label?.trim() || undefined,
-      instructions: b.instructions?.trim() || undefined,
-      zone: b.zone || undefined,
-      duration: b.duration === '' || b.duration == null ? undefined : (parseInt(b.duration) || undefined),
-      distance: b.distance === '' || b.distance == null ? undefined : (parseFloat(b.distance) || undefined),
-    }))
+  function submit() {
     onAdd({
-      sport, label, dayOfWeek,
+      sport, label: label.trim() || sportM?.label, dayOfWeek,
       duration: parseInt(duration) || 0,
       distance: distance !== '' ? parseFloat(distance) : null,
-      zone,
-      note,
-      rpe: rpe.trim(),
-      nutritionTip: nutritionTip.trim(),
-      blocks: cleanBlocks,
-      repeat: isEdit ? 1 : repeat,
-      skipRecovery,
-      editId: isEdit ? editSession.id : undefined,
+      zone, note, rpe: String(rpe).trim(), nutritionTip: nutritionTip.trim(),
+      blocks: blocks.map(b => ({
+        ...b,
+        type: b.type || 'work',
+        label: b.label?.trim() || undefined,
+        instructions: b.instructions?.trim() || undefined,
+        zone: b.zone || undefined,
+        duration: b.duration === '' || b.duration == null ? undefined : (parseInt(b.duration) || undefined),
+        distance: b.distance === '' || b.distance == null ? undefined : (parseFloat(b.distance) || undefined),
+      })),
+      repeat: e ? 1 : repeat, skipRecovery,
+      editId: e?.id,
     })
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
-      style={{ background: 'rgba(0,0,0,0.85)' }} onClick={onClose}>
-      <div className="w-full sm:max-w-2xl rounded-t-3xl sm:rounded-2xl overflow-y-auto"
-        style={{ background: 'var(--surface)', maxHeight: '92vh' }} onClick={e => e.stopPropagation()}>
+    <Modal eyebrow={`Semaine ${weekIdx + 1}`} title={e ? 'Modifier la séance' : 'Nouvelle séance'} onClose={onClose} width={680}
+      footer={<>
+        <button className="btn btn-ghost" onClick={onClose}>Annuler</button>
+        <button className="btn btn-primary" onClick={submit}>
+          {e ? 'Enregistrer' : repeat > 1 ? `Ajouter sur ${repeat} semaines` : 'Ajouter la séance'} <Icon name="arrow" size={16} />
+        </button>
+      </>}>
 
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b sticky top-0 z-10"
-          style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
-          <h3 className="font-bold text-white text-lg">
-            {isEdit ? 'Modifier la séance' : 'Créer une séance'}
-          </h3>
-          <button onClick={onClose} className="w-8 h-8 rounded-lg flex items-center justify-center"
-            style={{ background: 'var(--surface2)', color: 'var(--text3)' }}>✕</button>
-        </div>
+      <div className="flex gap-2 flex-wrap">
+        {Object.entries(SPORT_META).map(([k, m]) => (
+          <button key={k} onClick={() => setSport(k)} className="chip"
+            style={sport === k ? { background: sportColor(k), borderColor: sportColor(k), color: '#fff' } : undefined}>
+            {m.label}
+          </button>
+        ))}
+      </div>
 
-        <div className="px-6 py-5 flex flex-col gap-5">
-
-          {/* Sport selector */}
-          <div>
-            <label className="text-[10px] font-bold uppercase tracking-widest mb-2 block" style={{ color: 'var(--text3)' }}>Sport</label>
-            <div className="flex gap-2 flex-wrap">
-              {Object.entries(SPORT_META).map(([s, m]) => (
-                <button key={s} onClick={() => { setSport(s); setPreset(null); setZone('Z2') }}
-                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-semibold transition-all"
-                  style={{
-                    background: sport === s ? m.color + '22' : 'var(--surface2)',
-                    color:      sport === s ? m.color : 'var(--text2)',
-                    border:     `1px solid ${sport === s ? m.color + '88' : 'var(--border)'}`,
-                  }}>
-                  {m.emoji} {m.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Presets */}
-          {presets.length > 0 && (
-            <div>
-              <label className="text-[10px] font-bold uppercase tracking-widest mb-2 block" style={{ color: 'var(--text3)' }}>
-                Modèle rapide <span style={{ fontWeight: 400 }}>(optionnel)</span>
-              </label>
-              <div className="flex gap-1.5 flex-wrap">
-                {presets.map((p, i) => (
-                  <button key={i} onClick={() => applyPreset(p)}
-                    className="px-2.5 py-1 rounded-lg text-xs font-medium transition-all"
-                    style={{
-                      background: preset?.label === p.label ? COACH_COLOR + '22' : 'var(--surface2)',
-                      color:      preset?.label === p.label ? COACH_COLOR : 'var(--text3)',
-                      border:     `1px solid ${preset?.label === p.label ? COACH_COLOR + '66' : 'var(--border)'}`,
-                    }}>
-                    {p.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Titre */}
-          <div>
-            <label className="text-[10px] font-bold uppercase tracking-widest mb-1.5 block" style={{ color: 'var(--text3)' }}>Titre de la séance *</label>
-            <input value={label} onChange={e => setLabel(e.target.value)} placeholder="Ex: Intervalles 5×1000m @Z4"
-              className="w-full px-4 py-2.5 rounded-xl text-sm text-white outline-none"
-              style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }} />
-          </div>
-
-          {/* Jour + Durée + Distance */}
-          <div className="grid grid-cols-3 gap-3">
-            <div>
-              <label className="text-[10px] font-bold uppercase tracking-widest mb-1.5 block" style={{ color: 'var(--text3)' }}>Jour</label>
-              <div className="flex flex-wrap gap-1">
-                {DAYS_SHORT.map((d, i) => (
-                  <button key={i} onClick={() => setDayOfWeek(i)}
-                    className="w-8 h-8 rounded-lg text-xs font-bold transition-all"
-                    style={{ background: dayOfWeek === i ? COACH_COLOR : 'var(--surface2)', color: dayOfWeek === i ? '#fff' : 'var(--text2)' }}>
-                    {d}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div>
-              <label className="text-[10px] font-bold uppercase tracking-widest mb-1.5 block" style={{ color: 'var(--text3)' }}>
-                Durée (min)
-                {blocksTotalMin > 0 && (
-                  <button onClick={() => setDuration(blocksTotalMin)} className="ml-1 normal-case font-normal underline" style={{ color: COACH_COLOR }}>
-                    Σ blocs {blocksTotalMin}
-                  </button>
-                )}
-              </label>
-              <input type="number" value={duration} onChange={e => setDuration(e.target.value)}
-                min={10} max={480}
-                className="w-full px-3 py-2.5 rounded-xl text-sm text-white outline-none"
-                style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }} />
-            </div>
-            <div>
-              <label className="text-[10px] font-bold uppercase tracking-widest mb-1.5 block" style={{ color: 'var(--text3)' }}>
-                Distance {sportM?.distUnit ? `(${sportM.distUnit})` : ''}
-              </label>
-              <input type="number" value={distance} onChange={e => setDistance(e.target.value)} placeholder="—"
-                disabled={!sportM?.distUnit}
-                className="w-full px-3 py-2.5 rounded-xl text-sm text-white outline-none disabled:opacity-40"
-                style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }} />
-            </div>
-          </div>
-
-          {/* Zone dominante */}
-          <div>
-            <label className="text-[10px] font-bold uppercase tracking-widest mb-2 block" style={{ color: 'var(--text3)' }}>
-              Zone dominante <span className="normal-case font-normal">(sert au calcul du TSS)</span>
-            </label>
-            <div className="flex gap-2 mb-2">
-              {ZONES.map(z => (
-                <button key={z} onClick={() => setZone(z)}
-                  className="flex-1 py-2 rounded-xl text-xs font-bold transition-all"
-                  style={{
-                    background: zone === z ? ZONE_COLORS[z] + '33' : 'var(--surface2)',
-                    color:      zone === z ? ZONE_COLORS[z] : 'var(--text3)',
-                    border:     `1px solid ${zone === z ? ZONE_COLORS[z] + '88' : 'var(--border)'}`,
-                  }}>
-                  {z}
-                </button>
-              ))}
-            </div>
-            {zoneTarget && (
-              <div className="rounded-xl px-3 py-2 flex flex-wrap gap-3 text-xs" style={{ background: 'var(--surface2)' }}>
-                {zoneTarget.pace  && <span style={{ color: ZONE_COLORS[zone] }}>🏃 {zoneTarget.pace}</span>}
-                {zoneTarget.power && <span style={{ color: ZONE_COLORS[zone] }}>⚡ {zoneTarget.power}</span>}
-                {zoneTarget.hr    && <span style={{ color: 'var(--text3)' }}>❤️ {zoneTarget.hr}</span>}
-                {zoneTarget.label && <span style={{ color: 'var(--text2)' }}>{zoneTarget.label}</span>}
-              </div>
-            )}
-          </div>
-
-          {/* ── Contenu détaillé : blocs (ce que voit l'athlète) ── */}
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <label className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--text3)' }}>
-                Contenu détaillé <span className="normal-case font-normal">— affiché à l'athlète</span>
-              </label>
-              <button onClick={() => addBlock('work')}
-                className="text-xs font-semibold px-2.5 py-1 rounded-lg"
-                style={{ background: COACH_COLOR + '22', color: COACH_COLOR, border: `1px solid ${COACH_COLOR}55` }}>
-                + Bloc
+      <Field label="Titre">
+        <input className="input" value={label} onChange={ev => setLabel(ev.target.value)} placeholder="Ex : Intervalles 5×1000m" autoFocus />
+        {(SESSION_PRESETS[sport] || []).length > 0 && (
+          <div className="flex gap-1.5 flex-wrap mt-2">
+            {SESSION_PRESETS[sport].map(p => (
+              <button key={p.label} onClick={() => applyPreset(p)} className="pill pill-neutral hover:opacity-80" style={label === p.label ? { background: 'var(--red-soft)', color: 'var(--red)' } : undefined}>
+                {p.label}
               </button>
-            </div>
-
-            {blocks.length === 0 ? (
-              <div className="rounded-xl p-4 text-center" style={{ background: 'var(--surface2)', border: '1px dashed var(--border)' }}>
-                <p className="text-xs mb-3" style={{ color: 'var(--text3)' }}>
-                  Aucun bloc. Ajoute l'échauffement, le travail, la récup… chacun avec son commentaire.
-                </p>
-                <div className="flex gap-1.5 flex-wrap justify-center">
-                  {BLOCK_TYPES.map(t => (
-                    <button key={t.id} onClick={() => addBlock(t.id)}
-                      className="px-2.5 py-1 rounded-lg text-[11px] font-medium"
-                      style={{ background: 'var(--surface)', color: 'var(--text2)', border: '1px solid var(--border)' }}>
-                      + {t.emoji} {t.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ) : (
-              <div className="flex flex-col gap-2.5">
-                {blocks.map((b, i) => {
-                  const m = BLOCK_META[b.type] || BLOCK_META.other
-                  return (
-                    <div key={i} className="rounded-xl p-3 flex flex-col gap-2"
-                      style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }}>
-                      {/* Ligne 1 : type · durée · zone · déplacer · suppr */}
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <select value={b.type} onChange={e => updateBlock(i, { type: e.target.value })}
-                          className="text-xs font-bold outline-none rounded-lg px-2 py-1.5 flex-shrink-0"
-                          style={{ background: 'var(--surface)', color: 'var(--text2)', border: '1px solid var(--border)', colorScheme: 'dark' }}>
-                          {BLOCK_TYPES.map(t => <option key={t.id} value={t.id}>{t.emoji} {t.label}</option>)}
-                        </select>
-                        <div className="flex items-center gap-1">
-                          <input type="number" value={b.duration} onChange={e => updateBlock(i, { duration: e.target.value })}
-                            placeholder="min" min={1} max={480}
-                            className="w-16 px-2 py-1.5 rounded-lg text-xs text-white outline-none font-mono text-center"
-                            style={{ background: 'var(--surface)', border: '1px solid var(--border)' }} />
-                          <span className="text-[10px]" style={{ color: 'var(--text3)' }}>min</span>
-                        </div>
-                        {sportM?.distUnit && (
-                          <div className="flex items-center gap-1">
-                            <input type="number" value={b.distance} onChange={e => updateBlock(i, { distance: e.target.value })}
-                              placeholder={sportM.distUnit} min={0}
-                              className="w-16 px-2 py-1.5 rounded-lg text-xs text-white outline-none font-mono text-center"
-                              style={{ background: 'var(--surface)', border: '1px solid var(--border)' }} />
-                            <span className="text-[10px]" style={{ color: 'var(--text3)' }}>{sportM.distUnit}</span>
-                          </div>
-                        )}
-                        <div className="flex gap-0.5">
-                          {ZONES.map(z => (
-                            <button key={z} onClick={() => updateBlock(i, { zone: b.zone === z ? '' : z })}
-                              className="w-7 h-7 rounded-lg text-[10px] font-bold transition-all"
-                              style={{
-                                background: b.zone === z ? (ZONE_COLORS[z] || '#fff') + '33' : 'var(--surface)',
-                                color:      b.zone === z ? (ZONE_COLORS[z] || '#fff') : 'var(--text3)',
-                                border:     `1px solid ${b.zone === z ? (ZONE_COLORS[z] || '#fff') + '66' : 'var(--border)'}`,
-                              }}>
-                              {z.replace('Z', '')}
-                            </button>
-                          ))}
-                        </div>
-                        <div className="flex items-center gap-1 ml-auto">
-                          <button onClick={() => moveBlock(i, -1)} disabled={i === 0}
-                            className="w-6 h-6 rounded flex items-center justify-center text-[9px] disabled:opacity-20"
-                            style={{ background: 'var(--surface)', color: 'var(--text3)' }}>▲</button>
-                          <button onClick={() => moveBlock(i, 1)} disabled={i === blocks.length - 1}
-                            className="w-6 h-6 rounded flex items-center justify-center text-[9px] disabled:opacity-20"
-                            style={{ background: 'var(--surface)', color: 'var(--text3)' }}>▼</button>
-                          <button onClick={() => removeBlock(i)}
-                            className="w-6 h-6 rounded flex items-center justify-center text-xs"
-                            style={{ background: 'rgba(239,68,68,0.1)', color: '#f87171' }}>✕</button>
-                        </div>
-                      </div>
-                      {/* Ligne 2 : nom court du bloc */}
-                      <input value={b.label} onChange={e => updateBlock(i, { label: e.target.value })}
-                        placeholder={`Nom du bloc (ex: ${m.label}, 5×1000m…)`}
-                        className="w-full px-3 py-1.5 rounded-lg text-xs text-white outline-none"
-                        style={{ background: 'var(--surface)', border: '1px solid var(--border)' }} />
-                      {/* Ligne 3 : commentaire / consignes du bloc */}
-                      <textarea value={b.instructions} onChange={e => updateBlock(i, { instructions: e.target.value })}
-                        placeholder="Commentaire / consignes de ce bloc (allure, sensations, technique…)"
-                        rows={2} className="w-full px-3 py-2 rounded-lg text-xs text-white outline-none resize-none"
-                        style={{ background: 'var(--surface)', border: '1px solid var(--border)' }} />
-                    </div>
-                  )
-                })}
-                <div className="flex gap-1.5 flex-wrap pt-1">
-                  <span className="text-[10px] self-center pr-1" style={{ color: 'var(--text3)' }}>+ Bloc :</span>
-                  {BLOCK_TYPES.map(t => (
-                    <button key={t.id} onClick={() => addBlock(t.id)}
-                      className="px-2 py-1 rounded-lg text-[10px] font-medium"
-                      style={{ background: 'var(--surface2)', color: 'var(--text2)', border: '1px solid var(--border)' }}>
-                      {t.emoji} {t.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
+            ))}
           </div>
+        )}
+      </Field>
 
-          {/* RPE + Conseil nutrition (lus par l'app) */}
+      <div className="grid gap-3" style={{ gridTemplateColumns: 'minmax(0,1.6fr) minmax(0,1fr) minmax(0,1fr)' }}>
+        <Field label="Jour">
+          <div className="flex gap-1">
+            {DAYS_SHORT.map((d, i) => (
+              <button key={d} onClick={() => setDayOfWeek(i)} className="flex-1 h-11 rounded-xl text-[12px] font-bold"
+                style={dayOfWeek === i ? { background: 'var(--red)', color: '#fff' } : { background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--text2)' }}>
+                {d}
+              </button>
+            ))}
+          </div>
+        </Field>
+        <Field label={<>Durée (min){blocksMin > 0 && blocksMin !== parseInt(duration) && <button className="ml-1.5 underline" style={{ color: 'var(--red)' }} onClick={() => setDuration(blocksMin)}>= {blocksMin}</button>}</>}>
+          <input type="number" className="input" value={duration} min={5} onChange={ev => setDuration(ev.target.value)} />
+        </Field>
+        <Field label={`Distance${sportM?.distUnit ? ` (${sportM.distUnit})` : ''}`}>
+          <input type="number" className="input" value={distance} disabled={!sportM?.distUnit} onChange={ev => setDistance(ev.target.value)} placeholder="—" />
+        </Field>
+      </div>
+
+      <Field label="Intensité dominante">
+        <div className="flex gap-1.5">
+          {ZONES.map(z => (
+            <button key={z} onClick={() => setZone(z)} className="flex-1 h-10 rounded-xl text-[13px] font-extrabold"
+              style={zone === z ? { background: 'var(--red)', color: '#fff' } : { background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--text2)' }}>
+              {z}
+            </button>
+          ))}
+        </div>
+        {target && (target.pace || target.power || target.hr) && (
+          <p className="text-[12px] ink2 mt-2 flex gap-3 flex-wrap">
+            <span className="font-bold" style={{ color: 'var(--red)' }}>Pour cet athlète :</span>
+            {target.pace && <span>{target.pace}</span>}{target.power && <span>{target.power}</span>}{target.hr && <span>{target.hr}</span>}
+          </p>
+        )}
+      </Field>
+
+      <Field label="Contenu (ce que voit l'athlète)">
+        <div className="flex flex-col gap-2">
+          {blocks.map((b, i) => (
+            <div key={i} className="card-soft p-3 flex flex-col gap-2">
+              <div className="flex gap-2 items-center">
+                <span className="display text-lg w-7" style={{ color: 'var(--red)' }}>{String(i + 1).padStart(2, '0')}</span>
+                <select className="input" style={{ height: 36, width: 150, fontSize: 13 }} value={b.type} onChange={ev => updateBlock(i, { type: ev.target.value })}>
+                  {BLOCK_TYPES.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+                </select>
+                <input className="input flex-1" style={{ height: 36, fontSize: 13 }} value={b.label} onChange={ev => updateBlock(i, { label: ev.target.value })} placeholder="Ex : 5×1000m" />
+                <input className="input" type="number" style={{ height: 36, width: 70, fontSize: 13 }} value={b.duration} onChange={ev => updateBlock(i, { duration: ev.target.value })} placeholder="min" />
+                <select className="input" style={{ height: 36, width: 76, fontSize: 13 }} value={b.zone} onChange={ev => updateBlock(i, { zone: ev.target.value })}>
+                  <option value="">—</option>{ZONES.map(z => <option key={z}>{z}</option>)}
+                </select>
+                <div className="flex flex-col">
+                  <button className="muted hover:opacity-70 disabled:opacity-20" disabled={i === 0} onClick={() => moveBlock(i, -1)} aria-label="Monter"><Icon name="left" size={12} style={{ transform: 'rotate(90deg)' }} /></button>
+                  <button className="muted hover:opacity-70 disabled:opacity-20" disabled={i === blocks.length - 1} onClick={() => moveBlock(i, 1)} aria-label="Descendre"><Icon name="right" size={12} style={{ transform: 'rotate(90deg)' }} /></button>
+                </div>
+                <button className="muted hover:opacity-70" onClick={() => setBlocks(prev => prev.filter((_, k) => k !== i))} aria-label="Supprimer"><Icon name="x" size={16} /></button>
+              </div>
+              <input className="input" style={{ height: 34, fontSize: 13 }} value={b.instructions} onChange={ev => updateBlock(i, { instructions: ev.target.value })} placeholder="Consigne (allure, récup, technique…)" />
+            </div>
+          ))}
+          <div className="flex gap-2 flex-wrap">
+            {blocks.length === 0
+              ? <button className="btn btn-soft btn-sm" onClick={() => setBlocks([
+                  { type: 'warmup', label: 'Échauffement', instructions: '', zone: 'Z1', duration: 15, distance: '' },
+                  { type: 'work', label: label || '', instructions: '', zone, duration: '', distance: '' },
+                  { type: 'cooldown', label: 'Retour au calme', instructions: '', zone: 'Z1', duration: 10, distance: '' },
+                ])}><Icon name="plus" size={14} /> Échauffement · corps de séance · retour au calme</button>
+              : <button className="btn btn-ghost btn-sm" onClick={() => setBlocks(prev => [...prev, { type: 'work', label: '', instructions: '', zone: '', duration: '', distance: '' }])}><Icon name="plus" size={14} /> Ajouter une étape</button>}
+          </div>
+        </div>
+      </Field>
+
+      <button className="text-[13px] font-bold self-start flex items-center gap-1.5" style={{ color: 'var(--red)' }} onClick={() => setMore(m => !m)}>
+        <Icon name="down" size={14} style={{ transform: more ? 'rotate(180deg)' : 'none' }} /> {more ? "Moins d'options" : "Plus d'options"} (RPE, nutrition, note{!e ? ', répétition' : ''})
+      </button>
+      {more && (
+        <div className="flex flex-col gap-4">
           <div className="grid grid-cols-3 gap-3">
-            <div>
-              <label className="text-[10px] font-bold uppercase tracking-widest mb-1.5 block" style={{ color: 'var(--text3)' }}>RPE</label>
-              <input value={rpe} onChange={e => setRpe(e.target.value)} placeholder="ex: 7/10"
-                className="w-full px-3 py-2.5 rounded-xl text-sm text-white outline-none"
-                style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }} />
-            </div>
-            <div className="col-span-2">
-              <label className="text-[10px] font-bold uppercase tracking-widest mb-1.5 block" style={{ color: 'var(--text3)' }}>Conseil nutrition</label>
-              <input value={nutritionTip} onChange={e => setNutritionTip(e.target.value)} placeholder="ex: 1 gel toutes les 40 min"
-                className="w-full px-3 py-2.5 rounded-xl text-sm text-white outline-none"
-                style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }} />
-            </div>
+            <Field label="RPE visé"><input className="input" value={rpe} onChange={ev => setRpe(ev.target.value)} placeholder="Ex : 7/10" /></Field>
+            <div className="col-span-2"><Field label="Conseil nutrition"><input className="input" value={nutritionTip} onChange={ev => setNutritionTip(ev.target.value)} placeholder="Ex : 1 gel toutes les 40 min" /></Field></div>
           </div>
-
-          {/* Note coach privée */}
-          <div>
-            <label className="text-[10px] font-bold uppercase tracking-widest mb-1.5 block" style={{ color: 'var(--text3)' }}>
-              Note coach <span style={{ fontWeight: 400 }}>(s'affiche sur la carte du builder)</span>
-            </label>
-            <textarea value={note} onChange={e => setNote(e.target.value)}
-              placeholder="Rappel perso, focus de la séance..."
-              rows={2} className="w-full px-4 py-2.5 rounded-xl text-sm text-white outline-none resize-none"
-              style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }} />
-          </div>
-
-          {/* Récurrence — masquée en édition */}
-          {!isEdit && (
-            <div className="rounded-xl p-4" style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }}>
-              <div className="flex items-center justify-between mb-3">
-                <label className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--text3)' }}>Récurrence</label>
-                <span className="text-sm font-bold" style={{ color: COACH_COLOR }}>
-                  {repeat === 1 ? 'Semaine actuelle uniquement' : `Répéter sur ${repeat} semaines`}
-                </span>
-              </div>
-              <input type="range" min={1} max={maxRepeat} value={repeat}
-                onChange={e => setRepeat(parseInt(e.target.value))}
-                className="w-full mb-2" style={{ accentColor: COACH_COLOR }} />
-              <div className="flex justify-between text-[10px]" style={{ color: 'var(--text3)' }}>
-                <span>1 sem.</span>
-                <span>{Math.ceil(maxRepeat / 2)} sem.</span>
-                <span>{maxRepeat} sem.</span>
-              </div>
+          <Field label="Note privée (visible par toi seulement)"><input className="input" value={note} onChange={ev => setNote(ev.target.value)} placeholder="Rappel perso, focus…" /></Field>
+          {!e && maxRepeat > 1 && (
+            <Field label="Répéter">
+              <select className="input" value={repeat} onChange={ev => setRepeat(parseInt(ev.target.value))}>
+                <option value={1}>Cette semaine uniquement</option>
+                {Array.from({ length: maxRepeat - 1 }, (_, i) => i + 2).map(n => <option key={n} value={n}>Sur {n} semaines</option>)}
+              </select>
               {repeat > 1 && (
-                <label className="flex items-center gap-2 mt-3 cursor-pointer">
-                  <input type="checkbox" checked={skipRecovery} onChange={e => setSkipRecovery(e.target.checked)}
-                    style={{ accentColor: COACH_COLOR }} />
-                  <span className="text-xs" style={{ color: 'var(--text2)' }}>
-                    Volume réduit (-30%) sur les semaines de récupération
-                  </span>
+                <label className="flex items-center gap-2 mt-2 text-[13px] ink2 cursor-pointer">
+                  <input type="checkbox" checked={skipRecovery} onChange={ev => setSkipRecovery(ev.target.checked)} style={{ accentColor: 'var(--red)' }} />
+                  Volume réduit (−30 %) les semaines de récup
                 </label>
               )}
-            </div>
+            </Field>
           )}
         </div>
-
-        {/* Footer CTA */}
-        <div className="px-6 pb-6 pt-2 sticky bottom-0" style={{ background: 'var(--surface)' }}>
-          <button
-            onClick={handleSubmit}
-            disabled={!label.trim()}
-            className="w-full py-3.5 rounded-2xl text-sm font-bold text-white transition-opacity"
-            style={{ background: `linear-gradient(135deg, ${COACH_COLOR}, #1A9FAD)`, opacity: label.trim() ? 1 : 0.4 }}>
-            {isEdit
-              ? 'Modifier la séance →'
-              : repeat > 1 ? `Ajouter sur ${repeat} semaines →` : 'Ajouter à cette semaine →'}
-          </button>
-        </div>
-      </div>
-    </div>
+      )}
+    </Modal>
   )
 }
