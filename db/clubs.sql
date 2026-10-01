@@ -794,3 +794,46 @@ create policy profiles_club_read on public.profiles for select using (
 -- la table des codes coach n'est plus lisible ni modifiable par les clients.
 drop policy if exists coach_codes_read on public.coach_codes;
 drop policy if exists "coach_codes: claim own code" on public.coach_codes;
+
+-- ============================================================================
+-- V8 — Pro inclus pour les membres actifs d'un club
+-- ============================================================================
+-- premium_type = 'club' : accès Pro accordé par le club (l'app traite tout type ≠ 'free'
+-- avec une date d'expiration future comme Premium). Un abonnement payé (premium / dev)
+-- n'est jamais écrasé. Expiration = fin d'adhésion si renseignée, sinon +1 an glissant.
+create or replace function public.sync_club_premium(p_user uuid)
+returns void language plpgsql security definer set search_path = public as $$
+declare until timestamptz; cur text;
+begin
+  if p_user is null then return; end if;
+  select premium_type into cur from public.profiles where id = p_user;
+  select max(coalesce(m.membership_until::timestamptz + interval '1 day', now() + interval '1 year'))
+    into until
+    from public.club_members m
+    where m.user_id = p_user and m.status = 'active'
+      and (m.membership_until is null or m.membership_until >= current_date);
+  if until is not null then
+    -- Membre actif : Pro « club », sauf abonnement payé encore valide.
+    update public.profiles set premium_type = 'club', premium_expires_at = until
+      where id = p_user
+        and (coalesce(premium_type, 'free') in ('free', 'club')
+             or (premium_type = 'premium' and coalesce(premium_expires_at, now()) <= now()));
+  elsif cur = 'club' then
+    -- Plus membre (ou adhésion expirée) : retour au gratuit.
+    update public.profiles set premium_type = 'free', premium_expires_at = null where id = p_user;
+  end if;
+end $$;
+
+create or replace function public.club_members_sync_premium()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if tg_op in ('UPDATE', 'DELETE') then perform public.sync_club_premium(old.user_id); end if;
+  if tg_op in ('INSERT', 'UPDATE') then perform public.sync_club_premium(new.user_id); end if;
+  return coalesce(new, old);
+end $$;
+drop trigger if exists club_members_sync_premium on public.club_members;
+create trigger club_members_sync_premium after insert or update or delete on public.club_members
+  for each row execute function public.club_members_sync_premium();
+
+-- Rattrapage pour les membres existants.
+select public.sync_club_premium(user_id) from public.club_members where user_id is not null;
