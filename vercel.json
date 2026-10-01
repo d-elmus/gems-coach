@@ -1,5 +1,6 @@
 {
-  "rewrites": [
-    { "source": "/(.*)", "destination": "/index.html" }
+  "redirects": [
+    { "source": "/", "destination": "https://gems-triathlon.com/club/espace", "permanent": true },
+    { "source": "/:path*", "destination": "https://gems-triathlon.com/club/espace/:path*", "permanent": true }
   ]
 }
