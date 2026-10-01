@@ -1,25 +1,30 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Avatar, Icon, sportLabel, Meter } from './ui'
-import { fmtTime, fmtDay, setAttendance, deleteSession } from '../lib/clubData'
+import { BlocksList } from './Blocks'
+import { fmtTime, fmtDay, setAttendance, deleteSession, clubError } from '../lib/clubData'
 
 // Panneau latéral d'une séance : infos, contenu, inscrits + pointage de présence.
-export default function SessionDrawer({ session: s, onClose, onEdit, onChanged }) {
+// `onDuplicate` (facultatif) ouvre la création préremplie avec cette séance.
+export default function SessionDrawer({ session: s, onClose, onEdit, onDuplicate, onChanged }) {
   const navigate = useNavigate()
   const [busy, setBusy] = useState(null)
+  const [error, setError] = useState(null)
   const past = s.start < new Date()
 
   async function mark(b, value) {
-    setBusy(b.id)
-    await setAttendance(b.id, b.attended === value ? null : value)
+    setBusy(b.id); setError(null)
+    const { error: err } = await setAttendance(b.id, b.attended === value ? null : value)
     setBusy(null)
+    if (err) setError(clubError(err))
     onChanged?.()
   }
 
   async function remove() {
     const n = s.booked.length
     if (!window.confirm(`Supprimer « ${s.title} » ?${n ? `\n${n} inscrit${n > 1 ? 's' : ''} ser${n > 1 ? 'ont' : 'a'} désinscrit${n > 1 ? 's' : ''}.` : ''}`)) return
-    await deleteSession(s.id)
+    const { error: err } = await deleteSession(s.id)
+    if (err) { setError(clubError(err)); return }
     onChanged?.()
     onClose()
   }
@@ -34,8 +39,9 @@ export default function SessionDrawer({ session: s, onClose, onEdit, onChanged }
               <Icon name="x" size={16} />
             </button>
             <div className="flex gap-2">
-              <button onClick={() => onEdit(s)} className="w-9 h-9 rounded-full flex items-center justify-center" style={{ background: 'rgba(255,255,255,0.15)' }} aria-label="Modifier"><Icon name="edit" size={15} /></button>
-              <button onClick={remove} className="w-9 h-9 rounded-full flex items-center justify-center" style={{ background: 'rgba(255,255,255,0.15)' }} aria-label="Supprimer"><Icon name="trash" size={15} /></button>
+              {onDuplicate && <button onClick={() => onDuplicate(s)} title="Dupliquer" className="w-9 h-9 rounded-full flex items-center justify-center" style={{ background: 'rgba(255,255,255,0.15)' }} aria-label="Dupliquer"><Icon name="copy" size={15} /></button>}
+              <button onClick={() => onEdit(s)} title="Modifier" className="w-9 h-9 rounded-full flex items-center justify-center" style={{ background: 'rgba(255,255,255,0.15)' }} aria-label="Modifier"><Icon name="edit" size={15} /></button>
+              <button onClick={remove} className="w-9 h-9 rounded-full flex items-center justify-center" style={{ background: 'rgba(255,255,255,0.15)' }} title="Supprimer" aria-label="Supprimer"><Icon name="trash" size={15} /></button>
             </div>
           </div>
           <p className="text-[11px] font-extrabold tracking-[0.14em] opacity-80 mb-1.5">
@@ -58,22 +64,18 @@ export default function SessionDrawer({ session: s, onClose, onEdit, onChanged }
             <div className="min-w-0">
               <p className="font-extrabold">{s.coach?.full_name || 'Coach'}</p>
               <p className="text-[13px] muted">{fmtDay(s.start, { weekday: 'long', day: 'numeric', month: 'short' })} · {fmtTime(s.start)}{s.location ? ` · ${s.location}` : ''}</p>
+              {s.kind === 'collective' && <p className="text-[12px] font-semibold mt-0.5" style={{ color: s.group?.color || 'var(--text2)' }}>{s.group ? `Groupe ${s.group.name}` : 'Ouvert à tout le club'}</p>}
             </div>
           </div>
+
+          {error && <p className="text-[13px] rounded-xl px-3 py-2" style={{ background: 'var(--bad-soft)', color: 'var(--bad)' }}>{error}</p>}
+
+          {s.description && <p className="text-[13px] leading-relaxed ink2 whitespace-pre-line">{s.description}</p>}
 
           {Array.isArray(s.blocks) && s.blocks.length > 0 && (
             <div>
               <p className="eyebrow mb-2">Contenu de la séance</p>
-              {s.blocks.map((b, i) => (
-                <div key={i} className="flex items-center gap-4 py-3" style={{ borderTop: i ? '1px solid var(--border)' : 'none' }}>
-                  <span className="display text-2xl w-9" style={{ color: 'var(--red)' }}>{String(i + 1).padStart(2, '0')}</span>
-                  <div className="flex-1 min-w-0">
-                    <p className="font-bold">{b.label || 'Étape'}</p>
-                    <p className="text-[13px] muted">{[b.duration && `${b.duration}min`, b.instructions].filter(Boolean).join(' · ')}</p>
-                  </div>
-                  {b.zone && <span className="pill pill-neutral">{b.zone}</span>}
-                </div>
-              ))}
+              <BlocksList blocks={s.blocks} />
             </div>
           )}
 

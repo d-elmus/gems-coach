@@ -4,7 +4,7 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { useNotifications } from '../context/NotificationsContext'
 import { Header } from '../components/Layout'
-import { Avatar, Icon, Page } from '../components/ui'
+import { Avatar, Icon, Page, Spinner, ErrorNotice } from '../components/ui'
 
 function fmtWhen(d) {
   const x = new Date(d)
@@ -18,13 +18,16 @@ function ConversationList({ activeId }) {
   const { coach } = useAuth()
   const navigate = useNavigate()
   const [convs, setConvs] = useState(null)
+  const [error, setError] = useState(null)
 
   const load = useCallback(async () => {
-    const { data } = await supabase
+    const { data, error: err } = await supabase
       .from('messages')
       .select('*, from:from_id(id, full_name, photo_url), to:to_id(id, full_name, photo_url)')
       .or(`from_id.eq.${coach.id},to_id.eq.${coach.id}`)
       .order('created_at', { ascending: false })
+    setError(err)
+    if (err) return
     const seen = new Set()
     const out = []
     for (const m of data || []) {
@@ -51,6 +54,8 @@ function ConversationList({ activeId }) {
         <p className="card-title">Conversations</p>
       </div>
       <div className="flex-1 overflow-y-auto">
+        {convs === null && error && <div className="p-4"><ErrorNotice compact error={error} onRetry={load} /></div>}
+        {convs === null && !error && <div className="py-10 flex justify-center"><Spinner /></div>}
         {convs?.length === 0 && <p className="text-sm muted p-5">Les conversations avec tes athlètes apparaîtront ici.</p>}
         {(convs || []).map(c => {
           const on = c.other.id === activeId

@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { Header } from '../../components/Layout'
-import { Avatar, Icon, Page, Spinner, SportBadge, Empty } from '../../components/ui'
+import { Avatar, Icon, Page, Spinner, SportBadge, Empty, ErrorNotice } from '../../components/ui'
 import { AreaChart, Ring } from '../../components/charts'
 import { useAuth } from '../../context/AuthContext'
 import { useClub } from '../../context/ClubContext'
@@ -11,8 +11,31 @@ import { fmtDay, fmtTime, relTime } from '../../lib/clubData'
 import { parseDate, daysUntil } from '../../lib/dateUtils'
 import { SPORT_META, ZONE_COLORS, PHASE_COLORS, PHASE_LABELS, DISCIPLINE_LABELS, DAYS_SHORT } from '../../lib/planHelpers'
 import { GroupPill } from '../club/Members'
+import { fetchWorkouts, appliesTo, logStatus, targetLabel, rpeTone } from '../../lib/workoutData'
+import { toLocalDateStr } from '../../lib/dateUtils'
 
-const TABS = [['overview', "Vue d'ensemble"], ['plan', 'Plan'], ['activities', 'Activités'], ['presence', 'Présence']]
+const TABS = [['overview', "Vue d'ensemble"], ['plan', 'Plan'], ['activities', 'Activités'], ['workouts', 'Séances à faire'], ['presence', 'Présence']]
+
+// Séances à faire du club qui concernent l'athlète, avec son retour (fait / pas fait, RPE, commentaire).
+function WorkoutRow({ w, log, compact = false }) {
+  const st = logStatus(w, log)
+  return (
+    <div className={compact ? 'py-2.5' : 'card-soft px-4 py-3'} style={compact ? { borderTop: '1px solid var(--border)' } : undefined}>
+      <div className="flex items-center gap-3">
+        <SportBadge sport={w.sport} size={compact ? 32 : 38} />
+        <div className="flex-1 min-w-0">
+          <p className={`font-bold truncate ${compact ? 'text-[13px]' : ''}`}>{w.title}</p>
+          <p className="text-[12px] muted truncate">
+            {fmtDay(w.day)} · {w.duration_min} min{w.zone ? ` · ${w.zone}` : ''}{compact ? '' : ` · ${targetLabel(w)}${w.coach ? ` · ${w.coach.full_name}` : ''}`}
+          </p>
+        </div>
+        {log?.rpe != null && <span className={`pill pill-${rpeTone(log.rpe)}`}>RPE {log.rpe}</span>}
+        <span className={`pill pill-${st.tone}`}><Icon name={st.icon} size={12} /> {st.label}</span>
+      </div>
+      {log?.comment && <p className="text-[13px] ink2 mt-2 ml-11 px-3 py-2 rounded-xl" style={{ background: compact ? 'var(--surface2)' : 'var(--surface)' }}>« {log.comment} »</p>}
+    </div>
+  )
+}
 
 function SourceBadge({ source }) {
   const s = (source || '').toLowerCase()
@@ -157,16 +180,18 @@ export default function AthleteDetail() {
   const { club } = useClub()
   const [tab, setTab] = useState('overview')
   const [d, setD] = useState(null)
+  const [loadError, setLoadError] = useState(null)
   const [note, setNote] = useState('')
 
   const load = useCallback(async () => {
-    const [{ data: profile }, { data: plans }, activities, { data: notes }] = await Promise.all([
+    const [{ data: profile, error: profileError }, { data: plans }, activities, { data: notes }] = await Promise.all([
       supabase.from('profiles').select('*').eq('id', id).single(),
       supabase.from('plans').select('*').eq('user_id', id).order('created_at', { ascending: false }),
       fetchActivities(id),
       supabase.from('coach_notes').select('*').eq('athlete_id', id).eq('coach_id', coach.id).order('created_at', { ascending: false }).limit(5),
     ])
-    let member = null, bookings = []
+    if (profileError && profileError.code !== 'PGRST116') { setLoadError(profileError); return }
+    let member = null, bookings = [], workouts = [], workoutsError = null
     if (club) {
       const [{ data: m }, { data: b }] = await Promise.all([
         supabase.from('club_members').select('*, group:group_id(id, name, color)').eq('club_id', club.id).eq('user_id', id).maybeSingle(),
@@ -174,8 +199,19 @@ export default function AthleteDetail() {
       ])
       member = m
       bookings = (b || []).filter(x => x.session?.club_id === club.id).sort((a, c) => c.session.starts_at.localeCompare(a.session.starts_at))
+      if (member) {
+        // 6 semaines passées + la semaine à venir, plus récentes d'abord.
+        const today = new Date(); today.setHours(0, 0, 0, 0)
+        try {
+          const all = await fetchWorkouts(club.id, new Date(today.getTime() - 42 * 86400000), new Date(today.getTime() + 8 * 86400000))
+          workouts = all.filter(w => appliesTo(w, member))
+            .map(w => ({ ...w, log: w.logs.find(l => l.user_id === id) || null }))
+            .sort((a, c) => c.date.localeCompare(a.date))
+        } catch (err) { workoutsError = err }
+      }
     }
-    setD({ profile, plans: plans || [], activities, notes: notes || [], member, bookings })
+    setLoadError(null)
+    setD({ profile, plans: plans || [], activities, notes: notes || [], member, bookings, workouts, workoutsError })
   }, [id, coach.id, club?.id])
 
   useEffect(() => { load() }, [load, navState?.refresh])
@@ -187,8 +223,16 @@ export default function AthleteDetail() {
     load()
   }
 
+  if (!d && loadError) return <Page><ErrorNotice error={loadError} onRetry={load} /></Page>
   if (!d) return <Page><Spinner full /></Page>
-  const { profile: a, plans, activities, notes, member, bookings } = d
+  if (!d.profile) return (
+    <Page>
+      <Empty icon="users" title="Athlète introuvable" text="Ce profil n'existe pas ou tu n'y as pas accès (il n'est ni ton athlète, ni membre de ton club).">
+        <button className="btn btn-ghost" onClick={() => navigate('/athletes')}>Retour à mes athlètes</button>
+      </Empty>
+    </Page>
+  )
+  const { profile: a, plans, activities, notes, member, bookings, workouts, workoutsError } = d
   const active = plans.find(p => p.is_active) || plans[0]
   const pbs = active?.pbs || {}
   const vma = active?.zones?.run?.vma
@@ -202,7 +246,11 @@ export default function AthleteDetail() {
   const nextBooking = bookings.filter(b => new Date(b.session.starts_at) > new Date()).pop()
   const j = active?.goal_date ? daysUntil(active.goal_date) : null
   const metrics = [['FTP', pbs.ftp && `${pbs.ftp}W`, 'bike'], ['CSS', pbs.css && `${pbs.css}/100m`, 'swim'], ['VMA', vma, 'run'], ['5K', pbs.pace5k && `${pbs.pace5k}/km`, 'run']].filter(m => m[1])
-  const tabs = TABS.filter(([k]) => k !== 'presence' || club)
+  const tabs = TABS.filter(([k]) => (k !== 'presence' || club) && (k !== 'workouts' || member))
+  const todayStr = toLocalDateStr(new Date())
+  const pastWorkouts = workouts.filter(w => w.date <= todayStr)
+  const answered = pastWorkouts.filter(w => w.log)
+  const doneRate = pastWorkouts.length ? Math.round(answered.filter(w => w.log.status === 'done').length / pastWorkouts.length * 100) : null
 
   return (
     <Page>
@@ -296,6 +344,18 @@ export default function AthleteDetail() {
                 ))}
               </div>
             )}
+            {member && (
+              <div className="card p-5">
+                <div className="flex items-center justify-between mb-1">
+                  <p className="card-title">Séances à faire</p>
+                  {doneRate != null && <b style={{ color: 'var(--red)' }}>{doneRate}%</b>}
+                </div>
+                {workoutsError ? <ErrorNotice compact error={workoutsError} />
+                  : pastWorkouts.length === 0 ? <p className="text-sm muted py-2">Aucune séance à faire prescrite récemment.</p>
+                    : pastWorkouts.slice(0, 4).map(w => <WorkoutRow key={w.id} w={w} log={w.log} compact />)}
+                {pastWorkouts.length > 4 && <button className="text-[13px] font-semibold mt-2" style={{ color: 'var(--red)' }} onClick={() => setTab('workouts')}>Tout voir ({workouts.length})</button>}
+              </div>
+            )}
             {nextBooking && (
               <div className="rounded-[20px] p-4 flex items-center gap-3" style={{ background: 'var(--red-soft)', border: '1px solid #EBC3C7' }}>
                 <SportBadge sport={nextBooking.session.sport} size={38} />
@@ -324,6 +384,29 @@ export default function AthleteDetail() {
         activities.length === 0
           ? <Empty icon="trend" title="Aucune activité" text="L'athlète n'a pas encore connecté Strava, Garmin ou Santé dans l'app." />
           : <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">{activities.map(x => <ActivityRow key={x.external_id} a={x} />)}</div>
+      )}
+
+      {tab === 'workouts' && (
+        workoutsError ? <ErrorNotice error={workoutsError} onRetry={load} />
+          : workouts.length === 0 ? (
+            <Empty icon="clipboard" title="Aucune séance à faire" text="Les séances prescrites à tout le club, à son groupe ou à lui seul apparaissent ici avec son retour (fait / pas fait, RPE, commentaire).">
+              <button className="btn btn-primary" onClick={() => navigate('/workouts')}><Icon name="plus" size={16} /> Prescrire une séance</button>
+            </Empty>
+          ) : (
+            <div className="flex flex-col gap-4">
+              <div className="grid grid-cols-3 gap-4">
+                {[
+                  ['Réalisées', `${answered.filter(w => w.log.status === 'done').length}/${pastWorkouts.length}`],
+                  ['Sans retour', pastWorkouts.filter(w => !w.log).length],
+                  ['RPE moyen', (() => { const r = answered.map(w => w.log.rpe).filter(v => v != null); return r.length ? String(Math.round(r.reduce((x, y) => x + y, 0) / r.length * 10) / 10).replace('.', ',') : '—' })()],
+                ].map(([l, v]) => (
+                  <div key={l} className="card px-5 py-4"><p className="text-[13px] font-semibold ink2">{l}</p><p className="text-2xl font-extrabold mt-1">{v}</p></div>
+                ))}
+              </div>
+              <p className="text-[13px] muted">6 dernières semaines et 7 prochains jours.</p>
+              <div className="flex flex-col gap-2">{workouts.map(w => <WorkoutRow key={w.id} w={w} log={w.log} />)}</div>
+            </div>
+          )
       )}
 
       {tab === 'presence' && (

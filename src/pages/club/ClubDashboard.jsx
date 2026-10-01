@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Header } from '../../components/Layout'
-import { Avatar, Icon, Page, Spinner, StatCard, SportBadge, Meter } from '../../components/ui'
+import { Avatar, Icon, Page, Spinner, StatCard, SportBadge, Meter, ErrorNotice } from '../../components/ui'
 import { useClub } from '../../context/ClubContext'
 import { useAuth } from '../../context/AuthContext'
 import { fetchMembers, fetchSessions, startOfWeek, addDays, fmtDay, fmtTime, relTime, weekLabel, membershipStatus } from '../../lib/clubData'
@@ -57,16 +57,20 @@ export default function ClubDashboard() {
   const { coach } = useAuth()
   const navigate = useNavigate()
   const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+  const [retry, setRetry] = useState(0)
 
   useEffect(() => {
     (async () => {
       const now = new Date()
       const thisWeek = startOfWeek(now)
       const from = addDays(thisWeek, -7 * 7)
-      const [{ data: members }, { data: sessions }] = await Promise.all([
+      const [{ data: members, error: e1 }, { data: sessions, error: e2 }] = await Promise.all([
         fetchMembers(club.id),
         fetchSessions(club.id, from, addDays(thisWeek, 14)),
       ])
+      if (e1 || e2) { setError(e1 || e2); return }
+      setError(null)
 
       const athletes = members.filter(m => m.roles?.includes('athlete'))
       const monthAgo = addDays(now, -30)
@@ -100,17 +104,30 @@ export default function ClubDashboard() {
 
       const upcoming = sessions.filter(s => s.end > now && s.kind === 'collective').slice(0, 6)
 
-      setData({ athletes, newThisMonth, activeMemberships, expiring, weeks, cur, prevAvg, feed, upcoming })
-    })()
-  }, [club.id])
+      const requests = members.filter(m => m.requested_role)
+
+      setData({ athletes, newThisMonth, activeMemberships, expiring, weeks, cur, prevAvg, feed, upcoming, requests })
+    })().catch(setError)
+  }, [club.id, retry])
 
   const firstName = coach?.full_name?.split(' ')[0] || ''
 
   return (
     <Page>
       <Header eyebrow={`Bonjour ${firstName} · Semaine du ${weekLabel(startOfWeek())}`} title="Tableau de bord" />
-      {!data ? <Spinner full /> : (
+      {!data && error ? <ErrorNotice error={error} onRetry={() => setRetry(r => r + 1)} /> : !data ? <Spinner full /> : (
         <div className="flex flex-col gap-5">
+          {data.requests.length > 0 && (
+            <button onClick={() => navigate('/club/members')} className="card px-5 py-4 flex items-center gap-4 text-left hover:shadow-lg transition-shadow"
+              style={{ borderColor: '#EBC3C7', background: 'linear-gradient(90deg, var(--red-soft), var(--surface))' }}>
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: 'var(--red)', color: '#fff' }}><Icon name="shield" size={18} /></div>
+              <div className="flex-1 min-w-0">
+                <p className="font-extrabold">{data.requests.length} demande{data.requests.length > 1 ? 's' : ''} de rôle à valider</p>
+                <p className="text-[13px] muted truncate">{data.requests.slice(0, 3).map(m => `${m.profile?.full_name || 'Membre'} (${m.requested_role})`).join(', ')}{data.requests.length > 3 ? '…' : ''}</p>
+              </div>
+              <span className="btn btn-primary btn-sm">Valider <Icon name="right" size={14} /></span>
+            </button>
+          )}
           <div className="grid grid-cols-2 xl:grid-cols-4 gap-5">
             <StatCard label="Adhérents" icon="users" value={data.athletes.length}
               sub={data.newThisMonth ? `+${data.newThisMonth} ce mois` : 'Aucune arrivée ce mois'} subTone={data.newThisMonth ? 'good' : undefined} />

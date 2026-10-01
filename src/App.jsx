@@ -21,6 +21,8 @@ import Planning from './pages/club/Planning'
 import Subscription from './pages/club/Subscription'
 import ClubSettings from './pages/club/ClubSettings'
 import CreateClub from './pages/club/CreateClub'
+import Workouts from './pages/Workouts'
+import Announcements from './pages/Announcements'
 import './index.css'
 
 function PrivateRoute({ children }) {
@@ -73,6 +75,8 @@ export default function App() {
               <Route path="/athletes/:id" element={P(<AthleteDetail />)} />
               <Route path="/athletes/:id/builder" element={P(<PlanBuilder />)} />
               <Route path="/agenda" element={P(<ClubRoute needsAdmin={false}><Agenda /></ClubRoute>)} />
+              <Route path="/workouts" element={P(<ClubRoute needsAdmin={false}><Workouts space="coach" /></ClubRoute>)} />
+              <Route path="/announcements" element={P(<ClubRoute needsAdmin={false}><Announcements space="coach" /></ClubRoute>)} />
               <Route path="/plans" element={P(<Plans />)} />
               <Route path="/messages" element={P(<MessagesList />)} />
               <Route path="/messages/:id" element={P(<Conversation />)} />
@@ -83,6 +87,8 @@ export default function App() {
               <Route path="/club/members" element={P(<ClubRoute><Members /></ClubRoute>)} />
               <Route path="/club/coaches" element={P(<ClubRoute><Coaches /></ClubRoute>)} />
               <Route path="/club/planning" element={P(<ClubRoute><Planning /></ClubRoute>)} />
+              <Route path="/club/workouts" element={P(<ClubRoute><Workouts space="club" /></ClubRoute>)} />
+              <Route path="/club/announcements" element={P(<ClubRoute><Announcements space="club" /></ClubRoute>)} />
               <Route path="/club/subscription" element={P(<ClubRoute><Subscription /></ClubRoute>)} />
               <Route path="/club/settings" element={P(<ClubRoute><ClubSettings /></ClubRoute>)} />
               <Route path="/club/new" element={P(<CreateClub />)} />

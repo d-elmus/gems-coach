@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Header } from '../../components/Layout'
-import { AvatarStack, Avatar, Icon, Page, Spinner } from '../../components/ui'
+import { AvatarStack, Avatar, Icon, Page, Spinner, ErrorNotice } from '../../components/ui'
 import { useAuth } from '../../context/AuthContext'
 import { useClub } from '../../context/ClubContext'
 import WeekCalendar, { CalendarLegend } from '../../components/WeekCalendar'
@@ -16,10 +16,14 @@ export default function Agenda() {
   const [sessions, setSessions] = useState(null)
   const [creating, setCreating] = useState(null)
   const [editing, setEditing] = useState(null)
+  const [duplicating, setDuplicating] = useState(null)
   const [selected, setSelected] = useState(null)
+  const [error, setError] = useState(null)
 
   const load = useCallback(async () => {
-    const { data } = await fetchSessions(club.id, weekStart, addDays(weekStart, 7), { coachId: coach.id })
+    const { data, error: err } = await fetchSessions(club.id, weekStart, addDays(weekStart, 7), { coachId: coach.id })
+    setError(err)
+    if (err) return
     setSessions(data)
     setSelected(sel => sel ? data.find(s => s.id === sel.id) || null : null)
   }, [club.id, coach.id, weekStart])
@@ -48,7 +52,7 @@ export default function Agenda() {
         <button className="btn btn-primary" onClick={() => setCreating(true)}><Icon name="plus" size={16} /> Ouvrir des créneaux</button>
       </Header>
 
-      {sessions === null ? <Spinner full /> : (
+      {sessions === null && error ? <ErrorNotice error={error} onRetry={load} /> : sessions === null ? <Spinner full /> : (
         <div className="grid gap-5" style={{ gridTemplateColumns: 'minmax(0,1fr) 300px' }}>
           <div className="min-w-0">
             <div className="grid grid-cols-3 gap-4 mb-5">
@@ -94,15 +98,16 @@ export default function Agenda() {
         </div>
       )}
 
-      {(creating || editing) && (
+      {(creating || editing || duplicating) && (
         <ClubSessionModal lockCoach
           initialDate={creating instanceof Date ? creating : undefined}
           session={editing}
-          onClose={() => { setCreating(null); setEditing(null) }}
-          onSaved={() => { setCreating(null); setEditing(null); load() }} />
+          template={duplicating}
+          onClose={() => { setCreating(null); setEditing(null); setDuplicating(null) }}
+          onSaved={() => { setCreating(null); setEditing(null); setDuplicating(null); load() }} />
       )}
-      {selected && !editing && (
-        <SessionDrawer session={selected} onClose={() => setSelected(null)} onEdit={s => setEditing(s)} onChanged={load} />
+      {selected && !editing && !duplicating && (
+        <SessionDrawer session={selected} onClose={() => setSelected(null)} onEdit={s => setEditing(s)} onDuplicate={s => setDuplicating(s)} onChanged={load} />
       )}
     </Page>
   )

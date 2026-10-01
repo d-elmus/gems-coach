@@ -7,9 +7,11 @@ import { Icon, Avatar, Mascot, Meter } from './ui'
 
 const CLUB_NAV = [
   { to: '/club', label: 'Tableau de bord', icon: 'grid', end: true },
-  { to: '/club/members', label: 'Membres', icon: 'users' },
+  { to: '/club/members', label: 'Membres', icon: 'users', badge: 'requests' },
   { to: '/club/coaches', label: 'Coachs', icon: 'whistle' },
   { to: '/club/planning', label: 'Planning', icon: 'calendar' },
+  { to: '/club/workouts', label: 'Séances à faire', icon: 'clipboard' },
+  { to: '/club/announcements', label: 'Annonces', icon: 'megaphone' },
   { to: '/club/subscription', label: 'Abonnement', icon: 'card' },
   { to: '/club/settings', label: 'Réglages', icon: 'settings' },
 ]
@@ -17,8 +19,10 @@ const COACH_NAV = [
   { to: '/', label: 'Tableau de bord', icon: 'grid', end: true },
   { to: '/athletes', label: 'Mes athlètes', icon: 'users' },
   { to: '/agenda', label: 'Mon agenda', icon: 'calendar', needsClub: true },
+  { to: '/workouts', label: 'Séances à faire', icon: 'clipboard', needsClub: true },
   { to: '/plans', label: 'Plans', icon: 'list' },
-  { to: '/messages', label: 'Messages', icon: 'message', badge: true },
+  { to: '/announcements', label: 'Annonces', icon: 'megaphone', needsClub: true },
+  { to: '/messages', label: 'Messages', icon: 'message', badge: 'unread' },
   { to: '/settings', label: 'Réglages', icon: 'settings' },
 ]
 
@@ -95,8 +99,8 @@ function ClubCard() {
         <div className="absolute left-0 right-0 top-full mt-2 rounded-2xl p-1.5 z-20"
           style={{ background: 'var(--surface)', boxShadow: 'var(--shadow-lg)', color: 'var(--text1)' }}>
           {[
-            { id: 'club', label: 'Espace club', sub: 'Membres, coachs, planning', icon: 'shield', home: '/club' },
-            { id: 'coach', label: 'Espace coach', sub: 'Mes athlètes, plans, messages', icon: 'whistle', home: '/' },
+            { id: 'club', label: 'Espace club', sub: 'Membres, coachs, planning, annonces', icon: 'shield', home: '/club' },
+            { id: 'coach', label: 'Espace coach', sub: 'Mes athlètes, séances, plans', icon: 'whistle', home: '/' },
           ].map(o => (
             <button key={o.id} onClick={() => { setSpace(o.id); setOpen(false); navigate(o.home) }}
               className="w-full flex items-center gap-3 p-2.5 rounded-xl text-left hover:bg-[var(--surface2)]">
@@ -199,12 +203,22 @@ export function Header({ eyebrow, title, children, search = true }) {
 // ─── Layout ───────────────────────────────────────────────────────────────────
 export default function Layout({ children }) {
   const { unread, clearUnread } = useNotifications()
-  const { space, club } = useClub()
+  const { space, club, isAdmin, setSpace, roleRequests } = useClub()
   const location = useLocation()
 
   useEffect(() => {
     if (location.pathname.startsWith('/messages')) clearUnread()
   }, [location.pathname])
+
+  // Lien direct vers une page /club/… : on affiche la navigation de l'espace club.
+  // Inversement, une page propre à l'espace coach affiche la navigation coach.
+  const onClubPage = /^\/club(\/|$)/.test(location.pathname) && location.pathname !== '/club/new'
+  const onCoachPage = /^\/(agenda|workouts|announcements|plans|athletes)\/?$/.test(location.pathname)
+  useEffect(() => {
+    if (!isAdmin) return
+    if (onClubPage && space !== 'club') setSpace('club')
+    else if (onCoachPage && space !== 'coach') setSpace('coach')
+  }, [onClubPage, onCoachPage, isAdmin, space, setSpace])
 
   const nav = (space === 'club' ? CLUB_NAV : COACH_NAV).filter(n => !n.needsClub || club)
 
@@ -230,12 +244,15 @@ export default function Layout({ children }) {
                 : { color: 'rgba(255,255,255,0.88)' }}>
               <Icon name={n.icon} size={18} />
               <span className="flex-1">{n.label}</span>
-              {n.badge && unread > 0 && (
-                <span className="min-w-[20px] h-5 px-1.5 rounded-full text-[11px] font-extrabold flex items-center justify-center"
-                  style={{ background: '#fff', color: 'var(--red)' }}>
-                  {unread > 99 ? '99+' : unread}
-                </span>
-              )}
+              {(() => {
+                const n2 = n.badge === 'unread' ? unread : n.badge === 'requests' ? roleRequests : 0
+                return n2 > 0 && (
+                  <span className="min-w-[20px] h-5 px-1.5 rounded-full text-[11px] font-extrabold flex items-center justify-center"
+                    style={{ background: '#fff', color: 'var(--red)' }} title={n.badge === 'requests' ? 'Demandes de rôle à valider' : 'Messages non lus'}>
+                    {n2 > 99 ? '99+' : n2}
+                  </span>
+                )
+              })()}
             </NavLink>
           ))}
         </nav>

@@ -1,12 +1,11 @@
 import { useState } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { useClub } from '../context/ClubContext'
-import { saveSessions, updateSession, addDays } from '../lib/clubData'
+import { saveSessions, updateSession, addDays, ZONES, estimateTss, clubError } from '../lib/clubData'
 import { Modal, Field, Icon, sportColor } from './ui'
+import { BlocksEditor } from './Blocks'
+import { defaultBlocks, cleanBlocks } from '../lib/blocks'
 import { SPORT_META } from '../lib/planHelpers'
-
-const ZONES = ['Z1', 'Z2', 'Z3', 'Z4', 'Z5']
-const ZONE_FACTOR = { Z1: 0.5, Z2: 0.8, Z3: 1.1, Z4: 1.4, Z5: 1.6 }
 
 function toDateInput(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -16,11 +15,15 @@ function toTimeInput(d) {
 }
 
 // Crée / modifie une séance du club : cours collectif ou créneaux 1:1.
-export default function ClubSessionModal({ initialDate, session, onClose, onSaved, lockCoach = false }) {
+// `template` = séance à dupliquer : formulaire prérempli, même créneau la semaine suivante.
+export default function ClubSessionModal({ initialDate, session: editSession, template, onClose, onSaved, lockCoach = false }) {
   const { coach } = useAuth()
   const { club, groups, staff, isAdmin } = useClub()
-  const editing = !!session
-  const base = session ? new Date(session.starts_at) : (initialDate || (() => { const d = new Date(); d.setHours(18, 0, 0, 0); return d })())
+  const editing = !!editSession
+  const session = editSession || template
+  const base = editSession ? new Date(editSession.starts_at)
+    : template ? addDays(new Date(template.starts_at), 7)
+      : (initialDate || (() => { const d = new Date(); d.setHours(18, 0, 0, 0); return d })())
 
   const [kind, setKind] = useState(session?.kind || 'collective')
   const [sport, setSport] = useState(session?.sport || 'run')
@@ -31,9 +34,10 @@ export default function ClubSessionModal({ initialDate, session, onClose, onSave
   const [location, setLocation] = useState(session?.location || '')
   const [capacity, setCapacity] = useState(session?.capacity ?? 20)
   const [groupId, setGroupId] = useState(session?.group_id || '')
-  const [coachId, setCoachId] = useState(session?.coach_id || coach?.id)
+  const [coachId, setCoachId] = useState(editing ? (editSession.coach_id || coach?.id) : lockCoach ? coach?.id : (template?.coach_id || coach?.id))
   const [zone, setZone] = useState(session?.zone || 'Z2')
   const [blocks, setBlocks] = useState(Array.isArray(session?.blocks) ? session.blocks : [])
+  const [description, setDescription] = useState(session?.description || '')
   const [showContent, setShowContent] = useState(!!session?.blocks?.length)
   const [repeat, setRepeat] = useState(1)
   const [slots, setSlots] = useState(4)
@@ -43,16 +47,11 @@ export default function ClubSessionModal({ initialDate, session, onClose, onSave
   const oneOnOne = kind === 'one_on_one'
   const canPickCoach = isAdmin && !lockCoach && staff.length > 1
 
-  function updateBlock(i, patch) { setBlocks(b => b.map((x, j) => j === i ? { ...x, ...patch } : x)) }
-
   async function submit() {
     setError(null)
     const start = new Date(`${date}T${time}:00`)
     if (isNaN(start)) { setError('Date ou heure invalide.'); return }
     const dur = parseInt(duration) || 60
-    const cleanBlocks = blocks
-      .filter(b => b.label?.trim() || b.duration)
-      .map(b => ({ type: b.type || 'work', label: b.label?.trim() || undefined, instructions: b.instructions?.trim() || undefined, zone: b.zone || undefined, duration: parseInt(b.duration) || undefined }))
     const common = {
       club_id: club.id,
       coach_id: coachId,
@@ -63,8 +62,9 @@ export default function ClubSessionModal({ initialDate, session, onClose, onSave
       location: location.trim() || null,
       group_id: oneOnOne ? null : (groupId || null),
       zone: oneOnOne ? null : zone,
-      tss: oneOnOne ? null : Math.round(dur * (ZONE_FACTOR[zone] ?? 0.8)),
-      blocks: oneOnOne ? [] : cleanBlocks,
+      tss: oneOnOne ? null : estimateTss(dur, zone),
+      blocks: oneOnOne ? [] : cleanBlocks(blocks),
+      description: description.trim() || null,
     }
 
     setSaving(true)
@@ -86,12 +86,12 @@ export default function ClubSessionModal({ initialDate, session, onClose, onSave
       res = await saveSessions(rows)
     }
     setSaving(false)
-    if (res.error) { setError(res.error.message); return }
+    if (res.error) { setError(clubError(res.error)); return }
     onSaved?.()
   }
 
   return (
-    <Modal eyebrow={editing ? 'Modifier' : 'Nouvelle séance'} title={oneOnOne ? 'Créneaux 1:1' : 'Cours collectif'} onClose={onClose} width={620}
+    <Modal eyebrow={editing ? 'Modifier' : template ? 'Dupliquer la séance' : 'Nouvelle séance'} title={oneOnOne ? 'Créneaux 1:1' : 'Cours collectif'} onClose={onClose} width={620}
       footer={<>
         {error && <p className="text-sm mr-auto" style={{ color: 'var(--bad)' }}>{error}</p>}
         <button className="btn btn-ghost" onClick={onClose}>Annuler</button>
@@ -179,33 +179,18 @@ export default function ClubSessionModal({ initialDate, session, onClose, onSave
       {!oneOnOne && (
         showContent ? (
           <Field label="Contenu de la séance" hint="Chaque athlète verra ses allures / watts calculés sur ses propres zones.">
-            <div className="flex flex-col gap-2">
-              {blocks.map((b, i) => (
-                <div key={i} className="card-soft p-3 flex flex-col gap-2">
-                  <div className="flex gap-2 items-center">
-                    <span className="text-lg font-extrabold italic w-7" style={{ color: 'var(--red)' }}>{String(i + 1).padStart(2, '0')}</span>
-                    <input className="input flex-1" style={{ height: 38 }} value={b.label || ''} onChange={e => updateBlock(i, { label: e.target.value })} placeholder="Ex : 5×1000m @Z4" />
-                    <input className="input" style={{ height: 38, width: 80 }} type="number" value={b.duration || ''} onChange={e => updateBlock(i, { duration: e.target.value })} placeholder="min" />
-                    <select className="input" style={{ height: 38, width: 84 }} value={b.zone || ''} onChange={e => updateBlock(i, { zone: e.target.value })}>
-                      <option value="">—</option>
-                      {ZONES.map(z => <option key={z}>{z}</option>)}
-                    </select>
-                    <button className="muted hover:opacity-70 px-1" onClick={() => setBlocks(bl => bl.filter((_, j) => j !== i))} aria-label="Supprimer"><Icon name="x" size={16} /></button>
-                  </div>
-                  <input className="input" style={{ height: 36, fontSize: 13 }} value={b.instructions || ''} onChange={e => updateBlock(i, { instructions: e.target.value })} placeholder="Consigne (récup, allure, technique…)" />
-                </div>
-              ))}
-              <button className="btn btn-ghost btn-sm self-start" onClick={() => setBlocks(b => [...b, { type: 'work', label: '', duration: '', zone: '' }])}>
-                <Icon name="plus" size={14} /> Ajouter une étape
-              </button>
-            </div>
+            <BlocksEditor blocks={blocks} onChange={setBlocks} />
           </Field>
         ) : (
-          <button className="btn btn-soft btn-sm self-start" onClick={() => { setShowContent(true); if (!blocks.length) setBlocks([{ type: 'warmup', label: 'Échauffement', duration: 15, zone: 'Z1' }, { type: 'work', label: '', duration: '', zone }, { type: 'cooldown', label: 'Retour au calme', duration: 10, zone: 'Z1' }]) }}>
+          <button className="btn btn-soft btn-sm self-start" onClick={() => { setShowContent(true); if (!blocks.length) setBlocks(defaultBlocks(zone)) }}>
             <Icon name="plus" size={14} /> Détailler le contenu (échauffement, corps, retour au calme)
           </button>
         )
       )}
+
+      <Field label="Description" hint="Matériel, point de rendez-vous, consignes générales…">
+        <textarea className="input" rows={2} value={description} onChange={e => setDescription(e.target.value)} placeholder="Ex : rendez-vous devant le gymnase, prévoir pointes et gourde." />
+      </Field>
 
       {!editing && (
         <Field label="Répéter">

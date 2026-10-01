@@ -1,13 +1,78 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Header } from '../../components/Layout'
-import { Avatar, Icon, Page, Spinner, StatCard, SportBadge, AvatarStack } from '../../components/ui'
+import { Avatar, Icon, Page, Spinner, StatCard, SportBadge, AvatarStack, Meter, ErrorNotice } from '../../components/ui'
 import { useAuth } from '../../context/AuthContext'
 import { useClub } from '../../context/ClubContext'
 import { useNotifications } from '../../context/NotificationsContext'
 import { supabase } from '../../lib/supabase'
 import { fetchCoachAthletes, compliance } from '../../lib/coachData'
-import { fetchSessions, fetchLastActivity, startOfWeek, addDays, weekLabel, fmtDay, fmtTime, relTime } from '../../lib/clubData'
+import { fetchSessions, fetchLastActivity, fetchClubAthletes, startOfWeek, addDays, weekLabel, fmtDay, fmtTime, relTime } from '../../lib/clubData'
+import { fetchWorkouts, workoutProgress, targetLabel } from '../../lib/workoutData'
+
+// « Aujourd'hui » : séances du club animées par le coach + séances à faire du jour.
+function TodayCard({ today }) {
+  const navigate = useNavigate()
+  const { sessions, workouts, athletes, error } = today
+  const label = new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })
+  return (
+    <div className="card p-6">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <p className="card-title">Aujourd'hui</p>
+          <p className="text-[13px] muted first-letter:uppercase">{label}</p>
+        </div>
+        <div className="flex gap-3">
+          <button className="text-[13px] font-semibold muted hover:opacity-70 flex items-center gap-1" onClick={() => navigate('/agenda')}>Agenda <Icon name="right" size={14} /></button>
+          <button className="text-[13px] font-semibold muted hover:opacity-70 flex items-center gap-1" onClick={() => navigate('/workouts')}>Séances à faire <Icon name="right" size={14} /></button>
+        </div>
+      </div>
+      {error && <div className="mb-3"><ErrorNotice compact error={error} /></div>}
+      <div className="grid gap-6" style={{ gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)' }}>
+        <div>
+          <p className="eyebrow mb-1">Séances du club · {sessions.length}</p>
+          {sessions.length === 0 && <p className="text-sm muted py-3">Tu n'animes aucune séance aujourd'hui.</p>}
+          {sessions.map(s => (
+            <button key={s.id} onClick={() => navigate('/agenda')} className="w-full flex items-center gap-3 py-3 text-left hover:opacity-80" style={{ borderTop: '1px solid var(--border)' }}>
+              <div className="w-12 flex-shrink-0 font-extrabold">{fmtTime(s.start)}</div>
+              <SportBadge sport={s.kind === 'one_on_one' ? 'coaching' : s.sport} size={34} />
+              <div className="flex-1 min-w-0">
+                <p className="font-bold truncate">{s.kind === 'one_on_one' ? `1:1 · ${s.booked[0]?.profile?.full_name || 'libre'}` : s.title}</p>
+                <p className="text-[12px] muted truncate">{[s.location, s.kind === 'collective' && (s.capacity ? `${s.booked.length}/${s.capacity} inscrits` : `${s.booked.length} inscrits`)].filter(Boolean).join(' · ')}</p>
+              </div>
+              {s.kind === 'collective' && <AvatarStack people={s.booked.map(b => ({ ...b.profile, id: b.user_id }))} size={24} />}
+            </button>
+          ))}
+        </div>
+        <div>
+          <p className="eyebrow mb-1">Séances à faire · {workouts.length}</p>
+          {workouts.length === 0 && (
+            <div className="py-3">
+              <p className="text-sm muted mb-2">Aucune séance à faire prescrite pour aujourd'hui.</p>
+              <button className="btn btn-soft btn-sm" onClick={() => navigate('/workouts')}><Icon name="plus" size={14} /> Prescrire une séance</button>
+            </div>
+          )}
+          {workouts.map(w => {
+            const p = workoutProgress(w, athletes)
+            return (
+              <button key={w.id} onClick={() => navigate('/workouts')} className="w-full flex items-center gap-3 py-3 text-left hover:opacity-80" style={{ borderTop: '1px solid var(--border)' }}>
+                <SportBadge sport={w.sport} size={34} />
+                <div className="flex-1 min-w-0">
+                  <p className="font-bold truncate">{w.title}</p>
+                  <p className="text-[12px] muted truncate">{targetLabel(w)} · {w.duration_min} min</p>
+                </div>
+                <div className="w-28 flex-shrink-0">
+                  <p className="text-[12px] font-bold text-right mb-1">{p.done.length}/{p.total} fait{p.done.length > 1 ? 's' : ''}{p.skipped.length ? ` · ${p.skipped.length} non` : ''}</p>
+                  <Meter value={p.done.length} max={p.total || 1} tone="good" height={4} />
+                </div>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+    </div>
+  )
+}
 
 function RequestRow({ person, sub, onAccept, onDecline, declineLabel = 'Refuser' }) {
   return (
@@ -29,6 +94,7 @@ export default function CoachDashboard() {
   const { unread } = useNotifications()
   const navigate = useNavigate()
   const [data, setData] = useState(null)
+  const [loadError, setLoadError] = useState(null)
 
   const load = useCallback(async () => {
     const { active, pending, plans } = await fetchCoachAthletes(coach.id)
@@ -54,16 +120,27 @@ export default function CoachDashboard() {
       return { ...r.athlete, reasons, lastAt }
     }).filter(a => a.reasons.length).slice(0, 6)
 
-    let sessions = []
+    let sessions = [], today = null
     if (club) {
       const now2 = new Date()
-      const { data: s } = await fetchSessions(club.id, now2, addDays(now2, 7), { coachId: coach.id })
+      const d0 = new Date(now2); d0.setHours(0, 0, 0, 0)
+      const d1 = addDays(d0, 1)
+      const [{ data: s }, { data: sToday, error: e1 }] = await Promise.all([
+        fetchSessions(club.id, now2, addDays(now2, 7), { coachId: coach.id }),
+        fetchSessions(club.id, d0, d1, { coachId: coach.id }),
+      ])
       sessions = s
+      today = { sessions: sToday, workouts: [], athletes: [], error: e1 }
+      try {
+        const [w, athletes] = await Promise.all([fetchWorkouts(club.id, d0, d1), fetchClubAthletes(club.id)])
+        today.workouts = w.filter(x => x.coach_id === coach.id)
+        today.athletes = athletes
+      } catch (err) { today.error = err }
     }
-    setData({ active, pending, waiting: waiting || [], watch, sessions, plans })
+    setData({ active, pending, waiting: waiting || [], watch, sessions, plans, today })
   }, [coach.id, club?.id])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => { load().catch(setLoadError) }, [load])
 
   async function accept(relId) {
     await supabase.from('coach_athletes').update({ status: 'active', started_at: new Date().toISOString() }).eq('id', relId)
@@ -94,7 +171,7 @@ export default function CoachDashboard() {
   return (
     <Page>
       <Header eyebrow={`Bonjour ${firstName} · Semaine du ${weekLabel(startOfWeek())}`} title="Tableau de bord" />
-      {!data ? <Spinner full /> : (
+      {!data && loadError ? <ErrorNotice error={loadError} onRetry={() => { setLoadError(null); load().catch(setLoadError) }} /> : !data ? <Spinner full /> : (
         <div className="flex flex-col gap-5">
           <div className="grid grid-cols-2 xl:grid-cols-4 gap-5">
             <StatCard label="Athlètes suivis" icon="users" value={data.active.length} sub={`${Object.keys(data.plans).length} avec un plan`} />
@@ -102,6 +179,8 @@ export default function CoachDashboard() {
             <StatCard label="Messages non lus" icon="message" value={unread} sub={unread ? 'Ouvre la messagerie' : 'Tout est lu'} />
             <StatCard label="À surveiller" icon="target" value={data.watch.length} sub={data.watch.length ? 'Voir la liste' : 'Tout le monde roule'} subTone={data.watch.length ? 'warn' : 'good'} />
           </div>
+
+          {data.today && <TodayCard today={data.today} />}
 
           {requests > 0 && (
             <div className="card p-6">

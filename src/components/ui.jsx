@@ -41,6 +41,10 @@ const PATHS = {
   shield: 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z',
   target: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 18a6 6 0 1 0 0-12 6 6 0 0 0 0 12zM12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4z',
   upload: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12',
+  megaphone: 'M3 11v2a1 1 0 0 0 1 1h2l6 4V6l-6 4H4a1 1 0 0 0-1 1zM16 9a4 4 0 0 1 0 6M19 6a8 8 0 0 1 0 12',
+  clipboard: 'M9 3h6v3H9zM9 4.5H6a2 2 0 0 0-2 2V20a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V6.5a2 2 0 0 0-2-2h-3M9 14l2 2 4-4',
+  pinned: 'M9 4h6M10 4v6l-3 4h10l-3-4V4M12 14v7',
+  filter: 'M3 5h18M6 12h12M10 19h4',
 }
 
 export function Icon({ name, size = 18, stroke = 2, className = '', style }) {
@@ -219,6 +223,39 @@ export function Meter({ value, max, tone = 'red', height = 6 }) {
     <div style={{ height, borderRadius: 99, background: tone === 'light' ? 'rgba(255,255,255,0.18)' : 'var(--surface3)' }}>
       <div style={{ width: `${pct}%`, height: '100%', borderRadius: 99, background: color, transition: 'width .3s' }} />
     </div>
+  )
+}
+
+// Erreur de chargement : message lisible + « Réessayer ».
+export function ErrorNotice({ error, onRetry, compact = false }) {
+  const msg = typeof error === 'string' ? error : error?.message || 'Erreur inconnue'
+  const missing = /does not exist|could not find the (table|function)|42P01|PGRST20[25]/i.test(`${error?.code || ''} ${msg}`)
+  const text = missing
+    ? "Une table manque dans Supabase : exécute la dernière version de db/clubs.sql (section V2), puis recharge."
+    : `Le chargement a échoué : ${msg}`
+  if (compact) {
+    return (
+      <div className="rounded-2xl px-4 py-3 flex items-center gap-3 text-[13px]" style={{ background: 'var(--bad-soft)', color: 'var(--bad)' }}>
+        <span className="flex-1">{text}</span>
+        {onRetry && <button className="font-bold underline" onClick={onRetry}>Réessayer</button>}
+      </div>
+    )
+  }
+  return (
+    <Empty icon="x" title="Impossible d'afficher cette page" text={text}>
+      {onRetry && <button className="btn btn-ghost" onClick={onRetry}>Réessayer</button>}
+    </Empty>
+  )
+}
+
+// Liste déroulante « pilule » pour les filtres (membres, planning, séances…).
+export function FilterSelect({ label, value, onChange, options, width }) {
+  return (
+    <select className="input" style={{ width: width || 'auto', minWidth: 130, borderRadius: 999, fontWeight: 600, color: value ? 'var(--red)' : undefined }}
+      value={value} onChange={e => onChange(e.target.value)} aria-label={label}>
+      <option value="">{label}</option>
+      {options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+    </select>
   )
 }
 

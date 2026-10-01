@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Header } from '../../components/Layout'
-import { Avatar, Icon, Page, Spinner, Empty, Meter } from '../../components/ui'
+import { Avatar, Icon, Page, Spinner, Empty, Meter, ErrorNotice } from '../../components/ui'
 import { useAuth } from '../../context/AuthContext'
 import { supabase } from '../../lib/supabase'
 import { planWeeks, compliance, currentWeekIdx } from '../../lib/coachData'
@@ -14,20 +14,25 @@ export default function Plans() {
   const navigate = useNavigate()
   const [plans, setPlans] = useState(null)
   const [filter, setFilter] = useState('all')
+  const [error, setError] = useState(null)
+  const [retry, setRetry] = useState(0)
 
   useEffect(() => {
     (async () => {
-      const { data: rel } = await supabase.from('coach_athletes')
+      const { data: rel, error: e1 } = await supabase.from('coach_athletes')
         .select('athlete:athlete_id(id, full_name, photo_url)').eq('coach_id', coach.id).eq('status', 'active')
+      if (e1) { setError(e1); return }
       const athletes = Object.fromEntries((rel || []).filter(r => r.athlete).map(r => [r.athlete.id, r.athlete]))
       const ids = Object.keys(athletes)
       if (!ids.length) { setPlans([]); return }
-      const { data } = await supabase.from('plans')
+      const { data, error: e2 } = await supabase.from('plans')
         .select('id,user_id,event_name,discipline,is_active,start_date,goal_date,athlete_metrics,weeks,completed_sessions,created_at')
         .in('user_id', ids).order('created_at', { ascending: false })
+      if (e2) { setError(e2); return }
+      setError(null)
       setPlans((data || []).filter(p => p.athlete_metrics?.coachId === coach.id).map(p => ({ ...p, athlete: athletes[p.user_id] })))
     })()
-  }, [coach.id])
+  }, [coach.id, retry])
 
   const shown = (plans || []).filter(p => filter === 'all' || (filter === 'active' ? p.is_active : !p.is_active))
 
@@ -42,7 +47,7 @@ export default function Plans() {
         <button className="btn btn-primary" onClick={() => navigate('/athletes')}><Icon name="plus" size={16} /> Nouveau plan</button>
       </Header>
 
-      {!plans ? <Spinner full /> : shown.length === 0 ? (
+      {!plans && error ? <ErrorNotice error={error} onRetry={() => setRetry(r => r + 1)} /> : !plans ? <Spinner full /> : shown.length === 0 ? (
         <Empty icon="list" title={plans.length ? 'Aucun plan dans ce filtre' : 'Aucun plan créé'}
           text="Choisis un athlète puis « Créer un plan ». Tu peux partir de zéro ou importer son entraînement actuel." />
       ) : (
