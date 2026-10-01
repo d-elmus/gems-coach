@@ -138,14 +138,12 @@ function ForgotPasswordForm({ onDone }) {
             value={email}
             onChange={e => setEmail(e.target.value)}
             required
-            className="w-full px-4 py-3 rounded-xl text-sm text-white outline-none"
-            style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }}
+            className="input"
             placeholder="coach@example.com"
           />
-          {error && <p className="text-sm text-red-400">{error}</p>}
+          {error && <p className="text-sm" style={{ color: 'var(--bad)' }}>{error}</p>}
           <button type="submit" disabled={loading}
-            className="w-full py-3 rounded-xl font-semibold text-white mt-2 transition-opacity"
-            style={{ background: 'var(--red)', opacity: loading ? 0.6 : 1 }}>
+            className="btn btn-primary w-full mt-2">
             {loading ? 'Envoi...' : 'Envoyer le code'}
           </button>
         </form>
@@ -162,8 +160,7 @@ function ForgotPasswordForm({ onDone }) {
           value={otp}
           onChange={e => setOtp(e.target.value)}
           required
-          className="w-full px-4 py-3 rounded-xl text-sm text-white outline-none text-center tracking-[0.3em]"
-          style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }}
+          className="input text-center tracking-[0.3em]"
           placeholder="000000"
         />
         <input
@@ -171,14 +168,12 @@ function ForgotPasswordForm({ onDone }) {
           value={pw}
           onChange={e => setPw(e.target.value)}
           required
-          className="w-full px-4 py-3 rounded-xl text-sm text-white outline-none"
-          style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }}
+          className="input"
           placeholder="Nouveau mot de passe"
         />
-        {error && <p className="text-sm text-red-400">{error}</p>}
+        {error && <p className="text-sm" style={{ color: 'var(--bad)' }}>{error}</p>}
         <button type="submit" disabled={loading}
-          className="w-full py-3 rounded-xl font-semibold text-white mt-2 transition-opacity"
-          style={{ background: 'var(--red)', opacity: loading ? 0.6 : 1 }}>
+          className="btn btn-primary w-full mt-2">
           {loading ? 'Validation...' : 'Valider'}
         </button>
       </form>
