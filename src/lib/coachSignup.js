@@ -22,6 +22,13 @@ import { supabase } from './supabase'
 // code soit saisi. On ne peut donc pas se contenter de "profil absent" comme
 // signal — il faut toujours retenter la promotion tant que le rôle n'est pas
 // déjà coach/admin.
+//
+// La promotion elle-même passe par la RPC SECURITY DEFINER claim_coach_code :
+// un autre trigger (trg_protect_premium_columns) réécrit silencieusement
+// `role` à son ancienne valeur pour toute requête faite en tant que
+// authenticated (anti auto-promotion), donc un simple update depuis le
+// client ne peut plus fonctionner — la RPC tourne en tant que postgres et
+// passe ce garde-fou.
 export async function finalizeCoachSignup(userId) {
   const { data: existing } = await supabase.from('profiles').select('*').eq('id', userId).single()
   if (existing && (existing.role === 'coach' || existing.role === 'admin')) return existing
@@ -30,23 +37,9 @@ export async function finalizeCoachSignup(userId) {
   const code = user?.user_metadata?.coach_code
   if (!code) return existing || null
 
-  const { data: claimed } = await supabase
-    .from('coach_codes')
-    .update({ used_by: userId, used_at: new Date().toISOString() })
-    .eq('code', code)
-    .is('used_by', null)
-    .select('id')
-    .single()
-  if (!claimed) return existing || null
+  const { data: claimed, error } = await supabase.rpc('claim_coach_code', { p_code: code })
+  if (error || !claimed) return existing || null
 
-  const { data: profile } = await supabase.from('profiles').upsert({
-    id: userId,
-    full_name: user.user_metadata?.full_name || existing?.full_name || '',
-    email: user.email,
-    role: 'coach',
-    gender: existing?.gender ?? null,
-    coach_available: true,
-  }).select().single()
-
+  const { data: profile } = await supabase.from('profiles').select('*').eq('id', userId).single()
   return profile
 }

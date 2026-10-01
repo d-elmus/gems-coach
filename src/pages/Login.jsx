@@ -98,6 +98,94 @@ function ConfirmEmailForm({ email }) {
   )
 }
 
+// Mot de passe oublié : demande un OTP par email, le vérifie, puis fixe un
+// nouveau mot de passe. Utile pour un compte athlète existant dont le
+// propriétaire ne se souvient plus du mot de passe.
+function ForgotPasswordForm({ onDone }) {
+  const { sendPasswordResetOtp, resetPasswordWithOtp } = useAuth()
+  const [step, setStep] = useState('email') // 'email' | 'otp' | 'password'
+  const [email, setEmail] = useState('')
+  const [otp, setOtp] = useState('')
+  const [pw, setPw] = useState('')
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  async function handleSendOtp(e) {
+    e.preventDefault()
+    setLoading(true); setError('')
+    const { error } = await sendPasswordResetOtp(email)
+    setLoading(false)
+    if (error) setError("Email introuvable ou erreur. Vérifie l'adresse.")
+    else setStep('otp')
+  }
+
+  async function handleVerifyOtp(e) {
+    e.preventDefault()
+    if (otp.length < 6) { setError('Entre le code à 6 chiffres reçu par email.'); return }
+    setLoading(true); setError('')
+    const { error } = await resetPasswordWithOtp(email, otp, pw)
+    setLoading(false)
+    if (error) setError('Code incorrect/expiré, ou mot de passe trop court (6 caractères min).')
+    else onDone()
+  }
+
+  if (step === 'email') {
+    return (
+      <Shell title="Mot de passe oublié" subtitle="Entre ton email, on t'envoie un code à 6 chiffres.">
+        <form onSubmit={handleSendOtp} className="flex flex-col gap-4">
+          <input
+            type="email"
+            value={email}
+            onChange={e => setEmail(e.target.value)}
+            required
+            className="w-full px-4 py-3 rounded-xl text-sm text-white outline-none"
+            style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }}
+            placeholder="coach@example.com"
+          />
+          {error && <p className="text-sm text-red-400">{error}</p>}
+          <button type="submit" disabled={loading}
+            className="w-full py-3 rounded-xl font-semibold text-white mt-2 transition-opacity"
+            style={{ background: 'var(--red)', opacity: loading ? 0.6 : 1 }}>
+            {loading ? 'Envoi...' : 'Envoyer le code'}
+          </button>
+        </form>
+      </Shell>
+    )
+  }
+
+  return (
+    <Shell title="Nouveau mot de passe" subtitle={`Code envoyé à ${email}. Entre-le avec ton nouveau mot de passe.`}>
+      <form onSubmit={handleVerifyOtp} className="flex flex-col gap-4">
+        <input
+          type="text"
+          inputMode="numeric"
+          value={otp}
+          onChange={e => setOtp(e.target.value)}
+          required
+          className="w-full px-4 py-3 rounded-xl text-sm text-white outline-none text-center tracking-[0.3em]"
+          style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }}
+          placeholder="000000"
+        />
+        <input
+          type="password"
+          value={pw}
+          onChange={e => setPw(e.target.value)}
+          required
+          className="w-full px-4 py-3 rounded-xl text-sm text-white outline-none"
+          style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }}
+          placeholder="Nouveau mot de passe"
+        />
+        {error && <p className="text-sm text-red-400">{error}</p>}
+        <button type="submit" disabled={loading}
+          className="w-full py-3 rounded-xl font-semibold text-white mt-2 transition-opacity"
+          style={{ background: 'var(--red)', opacity: loading ? 0.6 : 1 }}>
+          {loading ? 'Validation...' : 'Valider'}
+        </button>
+      </form>
+    </Shell>
+  )
+}
+
 export default function Login() {
   const { signIn, hasSession, coach, loading: authLoading } = useAuth()
   const navigate = useNavigate()
@@ -106,6 +194,7 @@ export default function Login() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [needsConfirm, setNeedsConfirm] = useState(false)
+  const [forgotPw, setForgotPw] = useState(false)
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -125,6 +214,7 @@ export default function Login() {
     else navigate('/')
   }
 
+  if (forgotPw) return <ForgotPasswordForm onDone={() => navigate('/')} />
   if (needsConfirm) return <ConfirmEmailForm email={email} />
   if (!authLoading && hasSession && !coach) return <ClaimCodeForm />
 
@@ -164,6 +254,10 @@ export default function Login() {
           {loading ? 'Connexion...' : 'Se connecter'}
         </button>
       </form>
+
+      <button onClick={() => setForgotPw(true)} className="text-center text-sm mt-4 w-full" style={{ color: 'var(--text3)' }}>
+        Mot de passe oublié ?
+      </button>
 
       <p className="text-center text-sm mt-6" style={{ color: 'var(--text3)' }}>
         Pas encore de compte ?{' '}
