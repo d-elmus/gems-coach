@@ -837,3 +837,168 @@ create trigger club_members_sync_premium after insert or update or delete on pub
 
 -- Rattrapage pour les membres existants.
 select public.sync_club_premium(user_id) from public.club_members where user_id is not null;
+
+-- ============================================================================
+-- V9 — Rôle développeur GEMS (console dev : inscrits, stats, clubs, vue « en tant que »)
+-- Validé explicitement par Eloi le 2026-10-02 : lecture de toutes les données.
+-- ============================================================================
+create table if not exists public.gems_devs (
+  user_id    uuid primary key references public.profiles(id) on delete cascade,
+  added_by   uuid references public.profiles(id) on delete set null,
+  created_at timestamptz not null default now()
+);
+alter table public.gems_devs enable row level security;
+
+create or replace function public.is_gems_dev()
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.gems_devs where user_id = auth.uid());
+$$;
+grant execute on function public.is_gems_dev() to authenticated;
+
+drop policy if exists gems_devs_read on public.gems_devs;
+create policy gems_devs_read on public.gems_devs for select using (public.is_gems_dev());
+
+insert into public.gems_devs(user_id)
+select id from public.profiles where email in ('eloi.dumas.92@gmail.com', 'gustavefournier2004@gmail.com')
+on conflict do nothing;
+
+do $$
+declare t text;
+begin
+  foreach t in array array['clubs','club_groups','club_members','club_sessions','club_bookings',
+                           'club_workouts','club_workout_logs','club_announcements','profiles',
+                           'plans','synced_activities','coach_athletes','coach_notes','coach_waitlist']
+  loop
+    execute format('drop policy if exists dev_read on public.%I', t);
+    execute format('create policy dev_read on public.%I for select using (public.is_gems_dev())', t);
+  end loop;
+end $$;
+
+create table if not exists public.site_page_views (
+  day   date not null default current_date,
+  path  text not null,
+  views int  not null default 0,
+  primary key (day, path)
+);
+alter table public.site_page_views enable row level security;
+drop policy if exists site_page_views_dev_read on public.site_page_views;
+create policy site_page_views_dev_read on public.site_page_views for select using (public.is_gems_dev());
+
+create or replace function public.track_page_view(p_path text)
+returns void language sql security definer set search_path = public as $$
+  insert into public.site_page_views(day, path, views)
+  values (current_date, left(coalesce(nullif(regexp_replace(p_path, '\?.*$', ''), ''), '/'), 120), 1)
+  on conflict (day, path) do update set views = site_page_views.views + 1;
+$$;
+grant execute on function public.track_page_view(text) to anon, authenticated;
+
+create or replace function public.dev_recent_signups(p_limit int default 10)
+returns table (id uuid, email text, full_name text, created_at timestamptz, last_sign_in_at timestamptz,
+               provider text, role text, premium_type text, has_plan boolean, club_name text)
+language plpgsql stable security definer set search_path = public as $$
+begin
+  if not public.is_gems_dev() then raise exception 'forbidden'; end if;
+  return query
+  select u.id, u.email::text, p.full_name, u.created_at, u.last_sign_in_at,
+         coalesce(u.raw_app_meta_data->>'provider', 'email'), p.role, p.premium_type,
+         exists (select 1 from public.plans pl where pl.user_id = u.id),
+         (select c.name from public.club_members m join public.clubs c on c.id = m.club_id
+           where m.user_id = u.id and m.status = 'active' limit 1)
+  from auth.users u left join public.profiles p on p.id = u.id
+  order by u.created_at desc
+  limit least(greatest(coalesce(p_limit, 10), 1), 200);
+end $$;
+grant execute on function public.dev_recent_signups(int) to authenticated;
+
+create or replace function public.dev_stats()
+returns jsonb language plpgsql stable security definer set search_path = public as $$
+declare r jsonb;
+begin
+  if not public.is_gems_dev() then raise exception 'forbidden'; end if;
+  select jsonb_build_object(
+    'users_total',        (select count(*) from auth.users),
+    'users_7d',           (select count(*) from auth.users where created_at > now() - interval '7 days'),
+    'users_30d',          (select count(*) from auth.users where created_at > now() - interval '30 days'),
+    'active_7d',          (select count(*) from auth.users where last_sign_in_at > now() - interval '7 days'),
+    'active_30d',         (select count(*) from auth.users where last_sign_in_at > now() - interval '30 days'),
+    'premium_by_type',    (select coalesce(jsonb_object_agg(t, n), '{}'::jsonb) from (
+                             select coalesce(premium_type, 'free') t, count(*) n from public.profiles
+                             where coalesce(premium_type, 'free') = 'free' or premium_expires_at > now() or premium_type = 'dev'
+                             group by 1) s),
+    'roles',              (select coalesce(jsonb_object_agg(coalesce(role, '?'), n), '{}'::jsonb) from (
+                             select role, count(*) n from public.profiles group by 1) s),
+    'plans_total',        (select count(*) from public.plans),
+    'plans_active',       (select count(*) from public.plans where is_active),
+    'plans_7d',           (select count(*) from public.plans where created_at > now() - interval '7 days'),
+    'activities_7d',      (select count(*) from public.synced_activities where date > now() - interval '7 days'),
+    'strava_connected',   (select count(*) from public.strava_tokens),
+    'messages_7d',        (select count(*) from public.messages where created_at > now() - interval '7 days'),
+    'coach_relations',    (select count(*) from public.coach_athletes where status = 'active'),
+    'clubs',              (select count(*) from public.clubs),
+    'club_members',       (select count(*) from public.club_members where status = 'active' and user_id is not null),
+    'club_sessions_7d',   (select count(*) from public.club_sessions where starts_at between now() - interval '7 days' and now()),
+    'bookings_7d',        (select count(*) from public.club_bookings where created_at > now() - interval '7 days'),
+    'workout_logs_7d',    (select count(*) from public.club_workout_logs where created_at > now() - interval '7 days'),
+    'signups_by_day',     (select coalesce(jsonb_agg(jsonb_build_object('day', d, 'n', n) order by d), '[]'::jsonb) from (
+                             select created_at::date d, count(*) n from auth.users
+                             where created_at > now() - interval '30 days' group by 1) s),
+    'site_views_by_day',  (select coalesce(jsonb_agg(jsonb_build_object('day', day, 'n', n) order by day), '[]'::jsonb) from (
+                             select day, sum(views) n from public.site_page_views
+                             where day > current_date - 30 group by 1) s),
+    'site_top_pages',     (select coalesce(jsonb_agg(jsonb_build_object('path', path, 'n', n) order by n desc), '[]'::jsonb) from (
+                             select path, sum(views) n from public.site_page_views
+                             where day > current_date - 30 group by 1 order by 2 desc limit 10) s)
+  ) into r;
+  return r;
+end $$;
+grant execute on function public.dev_stats() to authenticated;
+
+create or replace function public.dev_clubs()
+returns table (id uuid, name text, city text, invite_code text, seats int, created_at timestamptz,
+               admins jsonb, athletes int, coaches int, invited int, role_requests int,
+               sessions_upcoming int, bookings_30d int, workouts_30d int, last_activity timestamptz)
+language plpgsql stable security definer set search_path = public as $$
+begin
+  if not public.is_gems_dev() then raise exception 'forbidden'; end if;
+  return query
+  select c.id, c.name, c.city, c.invite_code, c.seats, c.created_at,
+    (select coalesce(jsonb_agg(jsonb_build_object('id', p.id, 'name', p.full_name, 'email', p.email)), '[]'::jsonb)
+       from public.club_members m join public.profiles p on p.id = m.user_id
+       where m.club_id = c.id and 'admin' = any(m.roles) and m.status = 'active'),
+    (select count(*)::int from public.club_members m where m.club_id = c.id and m.status = 'active' and m.user_id is not null and 'athlete' = any(m.roles)),
+    (select count(*)::int from public.club_members m where m.club_id = c.id and m.status = 'active' and 'coach' = any(m.roles)),
+    (select count(*)::int from public.club_members m where m.club_id = c.id and m.user_id is null),
+    (select count(*)::int from public.club_members m where m.club_id = c.id and m.requested_role is not null),
+    (select count(*)::int from public.club_sessions s where s.club_id = c.id and s.starts_at > now()),
+    (select count(*)::int from public.club_bookings b join public.club_sessions s on s.id = b.session_id
+       where s.club_id = c.id and b.created_at > now() - interval '30 days'),
+    (select count(*)::int from public.club_workouts w where w.club_id = c.id and w.created_at > now() - interval '30 days'),
+    greatest(
+      (select max(b.created_at) from public.club_bookings b join public.club_sessions s on s.id = b.session_id where s.club_id = c.id),
+      (select max(w.created_at) from public.club_workouts w where w.club_id = c.id),
+      (select max(m.joined_at) from public.club_members m where m.club_id = c.id))
+  from public.clubs c
+  order by c.created_at desc;
+end $$;
+grant execute on function public.dev_clubs() to authenticated;
+
+create or replace function public.dev_set_dev(p_email text, p_on boolean)
+returns text language plpgsql security definer set search_path = public as $$
+declare v uuid;
+begin
+  if not public.is_gems_dev() then raise exception 'forbidden'; end if;
+  select id into v from public.profiles where lower(email) = lower(trim(p_email));
+  if v is null then return 'not_found'; end if;
+  if p_on then
+    insert into public.gems_devs(user_id, added_by) values (v, auth.uid()) on conflict do nothing;
+  else
+    if v = auth.uid() then raise exception 'cannot_remove_self'; end if;
+    delete from public.gems_devs where user_id = v;
+  end if;
+  return 'ok';
+end $$;
+grant execute on function public.dev_set_dev(text, boolean) to authenticated;
+
+-- V9 bis — messages coach ↔ athlète lisibles par les développeurs (« Voir en tant que »).
+drop policy if exists dev_read on public.messages;
+create policy dev_read on public.messages for select using (public.is_gems_dev());
