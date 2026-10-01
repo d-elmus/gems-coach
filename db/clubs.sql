@@ -609,3 +609,188 @@ begin
     where id = auth.uid() and coalesce(role, '') not in ('coach', 'admin');
   return c;
 end $$;
+
+-- ============================================================================
+-- V5 — Correctifs suite à la revue iOS
+-- ============================================================================
+-- join_club : un coach/admin déjà en place qui rejoint à nouveau ne recrée pas de demande.
+create or replace function public.join_club(p_code text, p_role text default 'athlete')
+returns uuid language plpgsql security definer set search_path = public as $$
+declare cid uuid;
+begin
+  if auth.uid() is null then raise exception 'not_authenticated'; end if;
+  select id into cid from public.clubs where invite_code = upper(trim(p_code));
+  if cid is null then raise exception 'invalid_code'; end if;
+  insert into public.club_members(club_id, user_id, roles, status, requested_role)
+  values (cid, auth.uid(), array['athlete'], 'active',
+          case when p_role in ('coach', 'admin') then p_role end)
+  on conflict (club_id, user_id) where user_id is not null do update
+    set status = 'active',
+        requested_role = case
+          when p_role in ('coach', 'admin') and not (p_role = any(club_members.roles)) then p_role
+          else club_members.requested_role end;
+  return cid;
+end $$;
+
+-- Un membre peut quitter son club (le dernier admin reste protégé par club_keep_one_admin).
+create or replace function public.leave_club(p_club uuid)
+returns void language plpgsql security definer set search_path = public as $$
+declare m public.club_members;
+begin
+  if auth.uid() is null then raise exception 'not_authenticated'; end if;
+  select * into m from public.club_members where club_id = p_club and user_id = auth.uid();
+  if m.id is null then return; end if;
+  if m.coach_id is not null then
+    delete from public.coach_athletes where coach_id = m.coach_id and athlete_id = auth.uid();
+  end if;
+  delete from public.club_bookings b using public.club_sessions s
+    where b.session_id = s.id and s.club_id = p_club and b.user_id = auth.uid() and s.starts_at > now();
+  delete from public.club_members where id = m.id;
+end $$;
+grant execute on function public.leave_club(uuid) to authenticated;
+
+-- ============================================================================
+-- V6 — Correctifs de sécurité (audit 2026-10-01) sur des objets préexistants
+-- ============================================================================
+create or replace function public.is_app_admin()
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.profiles where id = auth.uid() and role = 'admin');
+$$;
+
+-- C1 — Fonctions d'administration : réservées aux admins GEMS (avant : appelables par anon).
+create or replace function public.admin_list_admins()
+returns table(id uuid, full_name text, email text) language plpgsql security definer set search_path = public as $$
+begin
+  if not public.is_app_admin() then raise exception 'forbidden'; end if;
+  return query select p.id, p.full_name, u.email::text
+    from public.profiles p join auth.users u on p.id = u.id where p.role = 'admin';
+end $$;
+
+create or replace function public.admin_set_role_by_email(target_email text, new_role text)
+returns text language plpgsql security definer set search_path = public as $$
+declare v_id uuid;
+begin
+  if not public.is_app_admin() then raise exception 'forbidden'; end if;
+  if new_role not in ('athlete', 'coach', 'admin') then raise exception 'invalid_role'; end if;
+  select id into v_id from auth.users where email = target_email;
+  if v_id is null then return 'not_found'; end if;
+  update public.profiles set role = new_role where id = v_id;
+  return 'ok';
+end $$;
+
+create or replace function public.admin_set_role_by_id(target_id uuid, new_role text)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not public.is_app_admin() then raise exception 'forbidden'; end if;
+  if new_role not in ('athlete', 'coach', 'admin') then raise exception 'invalid_role'; end if;
+  update public.profiles set role = new_role where id = target_id;
+end $$;
+
+revoke execute on function public.admin_list_admins() from anon, public;
+revoke execute on function public.admin_set_role_by_email(text, text) from anon, public;
+revoke execute on function public.admin_set_role_by_id(uuid, text) from anon, public;
+grant execute on function public.admin_list_admins() to authenticated;
+grant execute on function public.admin_set_role_by_email(text, text) to authenticated;
+grant execute on function public.admin_set_role_by_id(uuid, text) to authenticated;
+
+-- C2 — coach_athletes : plus de relation « coach » auto-déclarée sur n'importe quel athlète.
+-- Insertion : l'athlète fait une demande (pending), ou un coach vérifié accepte quelqu'un
+-- de la file d'attente / d'un club où il est staff.
+drop policy if exists "coach_athletes: insert as coach" on public.coach_athletes;
+drop policy if exists coach_inserts_own_relation on public.coach_athletes;
+drop policy if exists coach_athletes_insert on public.coach_athletes;
+create policy coach_athletes_insert on public.coach_athletes for insert with check (
+  (auth.uid() = athlete_id and status = 'pending')
+  or (public.is_coach() and coach_id = auth.uid() and (
+        exists (select 1 from public.coach_waitlist w where w.user_id = athlete_id)
+        or public.is_staff_of_user(athlete_id)))
+);
+-- ca_coach était « ALL » : son USING servait aussi de WITH CHECK à l'insertion → découpé.
+drop policy if exists ca_coach on public.coach_athletes;
+drop policy if exists ca_read on public.coach_athletes;
+drop policy if exists ca_update on public.coach_athletes;
+drop policy if exists ca_delete on public.coach_athletes;
+create policy ca_read on public.coach_athletes for select using (coach_id = auth.uid() or athlete_id = auth.uid());
+create policy ca_update on public.coach_athletes for update
+  using (coach_id = auth.uid() or athlete_id = auth.uid())
+  with check (coach_id = auth.uid() or athlete_id = auth.uid());
+create policy ca_delete on public.coach_athletes for delete using (coach_id = auth.uid() or athlete_id = auth.uid());
+
+-- Une relation ne peut pas changer de coach ou d'athlète après coup (côté client).
+create or replace function public.coach_athletes_freeze_ids()
+returns trigger language plpgsql security invoker set search_path = public as $$
+begin
+  if current_user = 'authenticated' and (new.coach_id is distinct from old.coach_id or new.athlete_id is distinct from old.athlete_id) then
+    raise exception 'forbidden';
+  end if;
+  -- Seul le coach (ou le serveur) passe une demande en « active ».
+  if current_user = 'authenticated' and new.status = 'active' and old.status <> 'active' and auth.uid() <> new.coach_id then
+    raise exception 'forbidden';
+  end if;
+  return new;
+end $$;
+drop trigger if exists coach_athletes_freeze_ids on public.coach_athletes;
+create trigger coach_athletes_freeze_ids before update on public.coach_athletes
+  for each row execute function public.coach_athletes_freeze_ids();
+
+-- H2 — Strava : on ne consomme que son propre jeton (le serveur garde la main).
+create or replace function public.consume_strava_pending_token(p_user_id uuid)
+returns setof public.strava_pending_tokens language plpgsql security definer set search_path = public as $$
+begin
+  if coalesce(auth.role(), '') <> 'service_role' and auth.uid() is distinct from p_user_id then
+    raise exception 'forbidden';
+  end if;
+  return query delete from public.strava_pending_tokens where user_id = p_user_id::text returning *;
+end $$;
+revoke execute on function public.consume_strava_pending_token(uuid) from anon, public;
+grant execute on function public.consume_strava_pending_token(uuid) to authenticated;
+
+-- L1 — Retours (feedback) : lisibles par les admins GEMS uniquement (page /dashboard/retours).
+drop policy if exists "Authentifiés peuvent lire les retours" on public.feedback;
+drop policy if exists feedback_admin_read on public.feedback;
+create policy feedback_admin_read on public.feedback for select using (public.is_app_admin());
+
+-- H1 (étape 1) — Vérifier un code coach sans pouvoir lister la table.
+create or replace function public.check_coach_code(p_code text)
+returns text language sql stable security definer set search_path = public as $$
+  select case
+    when not exists (select 1 from public.coach_codes where code = upper(trim(p_code))) then 'invalid'
+    when exists (select 1 from public.coach_codes where code = upper(trim(p_code)) and used_by is not null) then 'used'
+    else 'ok' end;
+$$;
+grant execute on function public.check_coach_code(text) to anon, authenticated;
+
+-- ============================================================================
+-- V7 — M1 : annuaire du club sans données personnelles
+-- ============================================================================
+-- Les athlètes n'ont besoin que du nom et de la photo des autres membres : on passe
+-- par un annuaire restreint, et seuls les coachs/admins lisent les profils complets.
+create or replace function public.club_directory(p_club uuid)
+returns table (user_id uuid, full_name text, photo_url text, group_id uuid, roles text[])
+language sql stable security definer set search_path = public as $$
+  select m.user_id, p.full_name, p.photo_url, m.group_id, m.roles
+  from public.club_members m join public.profiles p on p.id = m.user_id
+  where m.club_id = p_club and m.status = 'active'
+    and public.is_club_member(p_club)
+    and (
+      public.is_club_staff(p_club)
+      or m.user_id = auth.uid()
+      or 'coach' = any(m.roles) or 'admin' = any(m.roles)
+      or (m.group_id is not null and m.group_id = public.my_club_group(p_club))
+    );
+$$;
+grant execute on function public.club_directory(uuid) to authenticated;
+
+-- Profils complets (email, téléphone, blessures…) : staff du club uniquement.
+drop policy if exists profiles_club_read on public.profiles;
+create policy profiles_club_read on public.profiles for select using (
+  exists (
+    select 1 from public.club_members them
+    where them.user_id = profiles.id and them.status = 'active' and public.is_club_staff(them.club_id)
+  )
+);
+
+-- H1 (étape 2, après déploiement du site qui utilise check_coach_code) :
+-- la table des codes coach n'est plus lisible ni modifiable par les clients.
+drop policy if exists coach_codes_read on public.coach_codes;
+drop policy if exists "coach_codes: claim own code" on public.coach_codes;
