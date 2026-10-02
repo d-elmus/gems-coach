@@ -1002,3 +1002,691 @@ grant execute on function public.dev_set_dev(text, boolean) to authenticated;
 -- V9 bis — messages coach ↔ athlète lisibles par les développeurs (« Voir en tant que »).
 drop policy if exists dev_read on public.messages;
 create policy dev_read on public.messages for select using (public.is_gems_dev());
+
+-- ============================================================================
+-- V11 — Audit sécurité base (2026-10-02) : clubs, invitations, stockage,
+--        messages, profils, plans, notes, file d'attente, promo, essai gratuit
+-- ============================================================================
+
+-- ── C1 : un admin de club n'ajoute personne d'autorité ───────────────────────
+drop policy if exists members_admin_write  on public.club_members;
+drop policy if exists members_admin_insert on public.club_members;
+drop policy if exists members_admin_update on public.club_members;
+drop policy if exists members_admin_delete on public.club_members;
+create policy members_admin_insert on public.club_members for insert to authenticated
+  with check (public.club_role(club_id, 'admin') and user_id is null and status = 'invited' and invite_email is not null);
+create policy members_admin_update on public.club_members for update to authenticated
+  using (public.club_role(club_id, 'admin')) with check (public.club_role(club_id, 'admin'));
+create policy members_admin_delete on public.club_members for delete to authenticated
+  using (public.club_role(club_id, 'admin'));
+
+create or replace function public.club_members_freeze()
+returns trigger language plpgsql security invoker set search_path = public as $$
+begin
+  if current_user = 'authenticated' then
+    if new.user_id is distinct from old.user_id or new.club_id is distinct from old.club_id
+       or new.invite_email is distinct from old.invite_email or new.joined_at is distinct from old.joined_at
+       or new.requested_role is distinct from old.requested_role then
+      raise exception 'forbidden';
+    end if;
+    -- Un admin ne réactive pas d'autorité une invitation en attente.
+    if old.status = 'invited' and new.status <> 'invited' then raise exception 'forbidden'; end if;
+  end if;
+  return new;
+end $$;
+drop trigger if exists club_members_freeze on public.club_members;
+create trigger club_members_freeze before update on public.club_members
+  for each row execute function public.club_members_freeze();
+
+create or replace function public.is_staff_of_user(p_user uuid)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (
+    select 1 from public.club_members me
+    join public.club_members them on them.club_id = me.club_id
+    where me.user_id = auth.uid() and me.status = 'active'
+      and ('admin' = any(me.roles) or 'coach' = any(me.roles))
+      and them.user_id = p_user and them.status = 'active');
+$$;
+
+-- ── C2 : invitations = consentement explicite ───────────────────────────────
+create or replace function public.claim_club_invites()
+returns int language plpgsql security definer set search_path = public as $$
+declare n int; em text;
+begin
+  select lower(email) into em from auth.users where id = auth.uid() and email_confirmed_at is not null;
+  if em is null then return 0; end if;
+  -- Rattache l'invitation au compte (reste « invited » jusqu'à acceptation).
+  update public.club_members m set user_id = auth.uid()
+  where m.user_id is null and m.status = 'invited' and lower(m.invite_email) = em
+    and not exists (select 1 from public.club_members x where x.club_id = m.club_id and x.user_id = auth.uid());
+  get diagnostics n = row_count;
+  return n;
+end $$;
+
+create or replace function public.my_club_invites()
+returns table (member_id uuid, club_id uuid, club_name text, club_city text, roles text[], invited_at timestamptz)
+language sql stable security definer set search_path = public as $$
+  select m.id, c.id, c.name, c.city, m.roles, m.joined_at
+  from public.club_members m join public.clubs c on c.id = m.club_id
+  where m.user_id = auth.uid() and m.status = 'invited'
+  order by m.joined_at desc;
+$$;
+
+create or replace function public.accept_club_invite(p_member uuid, p_accept boolean)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is null then raise exception 'not_authenticated'; end if;
+  if not p_accept then
+    delete from public.club_members where id = p_member and user_id = auth.uid() and status = 'invited';
+    return;
+  end if;
+  update public.club_members set status = 'active', invite_email = null, joined_at = now()
+   where id = p_member and user_id = auth.uid() and status = 'invited';
+  if not found then raise exception 'not_found'; end if;
+end $$;
+
+-- ── H1 : un club créé n'est actif (Pro inclus) qu'après validation GEMS ─────
+alter table public.clubs alter column plan_tier set default 'pending';
+alter table public.clubs alter column invite_code
+  set default upper(substr(translate(encode(gen_random_bytes(12), 'base64'), '+/=0O1Il', ''), 1, 8));
+
+create or replace function public.create_club(p_name text, p_city text default null)
+returns public.clubs language plpgsql security definer set search_path = public as $$
+declare c public.clubs;
+begin
+  if auth.uid() is null then raise exception 'not_authenticated'; end if;
+  if length(trim(coalesce(p_name, ''))) < 2 or length(p_name) > 80 then raise exception 'invalid_name'; end if;
+  if (select count(*) from public.clubs where created_by = auth.uid()) >= 3 then raise exception 'too_many_clubs'; end if;
+  insert into public.clubs(name, city, created_by, plan_tier)
+  values (trim(p_name), nullif(trim(left(coalesce(p_city, ''), 80)), ''), auth.uid(), 'pending')
+  returning * into c;
+  insert into public.club_members(club_id, user_id, roles, status) values (c.id, auth.uid(), array['admin','coach'], 'active');
+  insert into public.club_groups(club_id, name, color) values
+    (c.id, 'Compétition', '#9E1B2B'), (c.id, 'Loisir', '#0E9AAE'), (c.id, 'Découverte', '#A0407A');
+  -- Plus de rôle « coach » global : l'accès au portail vient du rôle dans le club.
+  return c;
+end $$;
+
+-- Les rôles de club ne donnent plus le rôle coach global (marketplace / file d'attente).
+create or replace function public.resolve_club_role_request(p_member uuid, p_accept boolean)
+returns void language plpgsql security definer set search_path = public as $$
+declare m public.club_members;
+begin
+  select * into m from public.club_members where id = p_member;
+  if m.id is null or not public.club_role(m.club_id, 'admin') then raise exception 'forbidden'; end if;
+  if m.requested_role is null then return; end if;
+  if p_accept then
+    update public.club_members
+      set roles = (select array_agg(distinct r) from unnest(roles || case when m.requested_role = 'admin'
+                     then array['admin','coach'] else array['coach'] end) r),
+          requested_role = null
+      where id = p_member;
+  else
+    update public.club_members set requested_role = null where id = p_member;
+  end if;
+end $$;
+
+-- join_club : code plus robuste côté serveur, pas de réactivation d'un membre désactivé, sièges.
+create or replace function public.join_club(p_code text, p_role text default 'athlete')
+returns uuid language plpgsql security definer set search_path = public as $$
+declare cid uuid; seats_max int; used int; existing public.club_members;
+begin
+  if auth.uid() is null then raise exception 'not_authenticated'; end if;
+  select id, seats into cid, seats_max from public.clubs where invite_code = upper(trim(p_code));
+  if cid is null then raise exception 'invalid_code'; end if;
+  select * into existing from public.club_members where club_id = cid and user_id = auth.uid();
+  if existing.id is not null then
+    if existing.status = 'inactive' then raise exception 'membership_disabled'; end if;
+    if existing.status = 'invited' then
+      update public.club_members set status = 'active', invite_email = null, joined_at = now() where id = existing.id;
+    end if;
+    if p_role in ('coach', 'admin') and not (p_role = any(existing.roles)) then
+      update public.club_members set requested_role = p_role where id = existing.id;
+    end if;
+    return cid;
+  end if;
+  select count(*) into used from public.club_members where club_id = cid and status = 'active' and user_id is not null;
+  if seats_max is not null and used >= seats_max then raise exception 'club_full'; end if;
+  insert into public.club_members(club_id, user_id, roles, status, requested_role)
+  values (cid, auth.uid(), array['athlete'], 'active', case when p_role in ('coach', 'admin') then p_role end);
+  return cid;
+end $$;
+
+-- Pro « club » : uniquement pour les clubs validés (club_pro), durée plafonnée ;
+-- en sortie de club, retour au gratuit sans rouvrir l'essai gratuit.
+create or replace function public.sync_club_premium(p_user uuid)
+returns void language plpgsql security definer set search_path = public as $$
+declare until timestamptz; cur text;
+begin
+  if p_user is null then return; end if;
+  select premium_type into cur from public.profiles where id = p_user;
+  select max(least(coalesce(m.membership_until::timestamptz + interval '1 day', now() + interval '1 year'),
+                   now() + interval '400 days'))
+    into until
+    from public.club_members m join public.clubs c on c.id = m.club_id
+    where m.user_id = p_user and m.status = 'active' and c.plan_tier = 'club_pro'
+      and (m.membership_until is null or m.membership_until >= current_date);
+  if until is not null then
+    update public.profiles set premium_type = 'club', premium_expires_at = until
+      where id = p_user
+        and (coalesce(premium_type, 'free') in ('free', 'club')
+             or (premium_type = 'premium' and coalesce(premium_expires_at, now()) <= now()));
+  elsif cur = 'club' then
+    update public.profiles set premium_type = 'free', premium_expires_at = now() where id = p_user;
+  end if;
+end $$;
+revoke execute on function public.sync_club_premium(uuid) from public, anon, authenticated;
+
+-- Changement de formule d'un club → resynchronise ses membres.
+create or replace function public.clubs_resync_premium()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if new.plan_tier is distinct from old.plan_tier then
+    perform public.sync_club_premium(m.user_id) from public.club_members m where m.club_id = new.id and m.user_id is not null;
+  end if;
+  return new;
+end $$;
+drop trigger if exists clubs_resync_premium on public.clubs;
+create trigger clubs_resync_premium after update on public.clubs
+  for each row execute function public.clubs_resync_premium();
+
+-- Un admin de club ne modifie ni la formule, ni les sièges, ni le créateur.
+create or replace function public.clubs_freeze_billing()
+returns trigger language plpgsql security invoker set search_path = public as $$
+begin
+  if current_user = 'authenticated' and not public.is_gems_dev() then
+    new.plan_tier := old.plan_tier; new.seats := old.seats; new.created_by := old.created_by;
+    new.invite_code := old.invite_code; new.created_at := old.created_at;
+  end if;
+  return new;
+end $$;
+drop trigger if exists clubs_freeze_billing on public.clubs;
+create trigger clubs_freeze_billing before update on public.clubs
+  for each row execute function public.clubs_freeze_billing();
+
+-- Les développeurs valident un club / changent sa formule.
+create or replace function public.dev_set_club_tier(p_club uuid, p_tier text, p_seats int default null)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not public.is_gems_dev() then raise exception 'forbidden'; end if;
+  if p_tier not in ('pending', 'club_pro', 'suspended') then raise exception 'invalid_tier'; end if;
+  update public.clubs set plan_tier = p_tier, seats = coalesce(p_seats, seats) where id = p_club;
+end $$;
+grant execute on function public.dev_set_club_tier(uuid, text, int) to authenticated;
+
+-- Un admin de club peut régénérer son code (fuite) — seul moyen de le changer.
+create or replace function public.rotate_club_code(p_club uuid)
+returns text language plpgsql security definer set search_path = public as $$
+declare code text;
+begin
+  if not public.club_role(p_club, 'admin') then raise exception 'forbidden'; end if;
+  code := upper(substr(translate(encode(gen_random_bytes(12), 'base64'), '+/=0O1Il', ''), 1, 8));
+  update public.clubs set invite_code = code where id = p_club;
+  return code;
+end $$;
+grant execute on function public.rotate_club_code(uuid) to authenticated;
+
+-- coach_athletes : le staff d'un club ne crée qu'une demande (pending) ; l'actif passe par assign_club_coach.
+drop policy if exists coach_athletes_insert on public.coach_athletes;
+create or replace function public.is_listed_coach(p uuid)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.profiles where id = p and role in ('coach', 'admin') and coach_available);
+$$;
+create policy coach_athletes_insert on public.coach_athletes for insert to authenticated with check (
+  (auth.uid() = athlete_id and status = 'pending' and public.is_listed_coach(coach_id))
+  or (public.is_coach() and coach_id = auth.uid() and exists (select 1 from public.coach_waitlist w where w.user_id = athlete_id))
+  or (coach_id = auth.uid() and status = 'pending' and public.is_staff_of_user(athlete_id))
+);
+
+-- ── H2 : stockage — chacun n'écrit que ses propres fichiers ─────────────────
+drop policy if exists "Users can upload their own avatar 1ige2ga_0" on storage.objects;
+drop policy if exists "Users can upload their own avatar 1ige2ga_1" on storage.objects;
+drop policy if exists "Users can upload their own avatar 1ige2ga_2" on storage.objects;
+drop policy if exists profiles_own_insert on storage.objects;
+drop policy if exists profiles_own_update on storage.objects;
+drop policy if exists profiles_own_select on storage.objects;
+create policy profiles_own_insert on storage.objects for insert to authenticated with check (
+  bucket_id = 'profiles' and (
+    name = 'avatars/' || auth.uid() || '.jpg'
+    or name ~ ('^coaches/' || auth.uid() || '\.(png|jpe?g|webp)$')
+    or (name ~ '^clubs/[0-9a-f-]{36}\.(png|jpe?g|webp)$' and public.club_role(substring(name from 7 for 36)::uuid, 'admin'))));
+create policy profiles_own_update on storage.objects for update to authenticated
+  using (bucket_id = 'profiles' and (
+    name = 'avatars/' || auth.uid() || '.jpg'
+    or name ~ ('^coaches/' || auth.uid() || '\.')
+    or (name ~ '^clubs/[0-9a-f-]{36}\.' and public.club_role(substring(name from 7 for 36)::uuid, 'admin'))))
+  with check (bucket_id = 'profiles' and (
+    name = 'avatars/' || auth.uid() || '.jpg'
+    or name ~ ('^coaches/' || auth.uid() || '\.(png|jpe?g|webp)$')
+    or (name ~ '^clubs/[0-9a-f-]{36}\.(png|jpe?g|webp)$' and public.club_role(substring(name from 7 for 36)::uuid, 'admin'))));
+create policy profiles_own_select on storage.objects for select to authenticated
+  using (bucket_id = 'profiles' and owner_id = auth.uid()::text);
+update storage.buckets set file_size_limit = 5242880, allowed_mime_types = '{image/jpeg,image/png,image/webp}'
+  where id in ('profiles', 'posts-images');
+drop policy if exists "Auth upload posts-images" on storage.objects;
+drop policy if exists posts_images_admin_insert on storage.objects;
+create policy posts_images_admin_insert on storage.objects for insert to authenticated
+  with check (bucket_id = 'posts-images' and public.is_app_admin());
+
+-- ── H3 : messages — expéditeur = soi, entre coach et athlète liés ───────────
+drop policy if exists msg_participants on public.messages;
+drop policy if exists "messages: insert own" on public.messages;
+drop policy if exists messages_insert on public.messages;
+drop policy if exists messages_mark_read on public.messages;
+create policy messages_insert on public.messages for insert to authenticated with check (
+  from_id = auth.uid() and to_id <> auth.uid() and exists (
+    select 1 from public.coach_athletes ca
+    where ca.status in ('active', 'pending')
+      and ((ca.coach_id = auth.uid() and ca.athlete_id = to_id) or (ca.athlete_id = auth.uid() and ca.coach_id = to_id))));
+create policy messages_mark_read on public.messages for update to authenticated
+  using (to_id = auth.uid()) with check (to_id = auth.uid());
+revoke update on public.messages from authenticated, anon;
+grant update (read_at) on public.messages to authenticated;
+
+-- ── H4 : profils — plus de lecture anonyme, plus d'exposition par demande forgée ─
+drop policy if exists coaches_public_read on public.profiles;
+create or replace function public.list_coaches()
+returns table (id uuid, full_name text, photo_url text, coach_bio text, coach_specialties text[],
+               coach_email text, coach_phone text, coach_available boolean)
+language sql stable security definer set search_path = public as $$
+  select id, full_name, photo_url, coach_bio, coach_specialties, coach_email, coach_phone, coach_available
+  from public.profiles where role = 'coach' and coach_available;
+$$;
+revoke execute on function public.list_coaches() from anon, public;
+grant execute on function public.list_coaches() to authenticated;
+
+-- ── H5 : l'email du profil suit celui du compte (pas modifiable à la main) ───
+create or replace function public.protect_premium_columns()
+returns trigger language plpgsql security invoker set search_path = public as $$
+begin
+  if current_user = 'authenticated' then
+    new.premium_type       := old.premium_type;
+    new.premium_expires_at := old.premium_expires_at;
+    new.premium_cancelled  := old.premium_cancelled;
+    new.premium_code       := old.premium_code;
+    new.premium_months     := old.premium_months;
+    new.is_premium         := old.is_premium;
+    new.role               := old.role;
+    new.email              := old.email;
+  end if;
+  return new;
+end $$;
+
+create or replace function public.dev_set_dev(p_email text, p_on boolean)
+returns text language plpgsql security definer set search_path = public as $$
+declare v uuid;
+begin
+  if not public.is_gems_dev() then raise exception 'forbidden'; end if;
+  select id into v from auth.users where lower(email) = lower(trim(p_email)) and email_confirmed_at is not null;
+  if v is null then return 'not_found'; end if;
+  if p_on then
+    insert into public.gems_devs(user_id, added_by) values (v, auth.uid()) on conflict do nothing;
+  else
+    if v = auth.uid() then raise exception 'cannot_remove_self'; end if;
+    delete from public.gems_devs where user_id = v;
+  end if;
+  return 'ok';
+end $$;
+
+-- ── M1 : plans — écriture coach seulement avec une relation active ──────────
+drop policy if exists "plans: owner or coach" on public.plans;
+drop policy if exists coach_delete_athlete_plans on public.plans;
+create policy coach_delete_athlete_plans on public.plans for delete using (
+  exists (select 1 from public.coach_athletes ca where ca.coach_id = auth.uid() and ca.athlete_id = plans.user_id and ca.status = 'active'));
+alter policy coach_update_athlete_plans on public.plans
+  using (user_id in (select athlete_id from public.coach_athletes where coach_id = auth.uid() and status = 'active'))
+  with check (user_id in (select athlete_id from public.coach_athletes where coach_id = auth.uid() and status = 'active'));
+
+-- ── M2 : notes coach ────────────────────────────────────────────────────────
+drop policy if exists notes_access on public.coach_notes;
+drop policy if exists notes_read on public.coach_notes;
+drop policy if exists notes_coach_write on public.coach_notes;
+create policy notes_read on public.coach_notes for select using (coach_id = auth.uid() or athlete_id = auth.uid());
+create policy notes_coach_write on public.coach_notes for all
+  using (coach_id = auth.uid())
+  with check (coach_id = auth.uid() and exists (select 1 from public.coach_athletes ca
+    where ca.coach_id = auth.uid() and ca.athlete_id = coach_notes.athlete_id and ca.status = 'active'));
+
+-- ── M3 : file d'attente — suppression réservée aux admins GEMS ──────────────
+drop policy if exists coach_deletes_waitlist on public.coach_waitlist;
+create policy coach_deletes_waitlist on public.coach_waitlist for delete using (public.is_app_admin());
+alter policy coach_updates_waitlist on public.coach_waitlist
+  using (public.is_coach()) with check (public.is_coach() and status in ('waiting', 'approved'));
+
+-- ── M6 : codes promo — une seule fois par compte, pas lisibles ──────────────
+create table if not exists public.promo_redemptions (
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  code text not null,
+  redeemed_at timestamptz not null default now(),
+  primary key (user_id, code)
+);
+alter table public.promo_redemptions enable row level security;
+drop policy if exists "Users can read active codes" on public.promo_codes;
+
+create or replace function public.apply_promo_code_safe(p_user_id uuid, p_code text)
+returns json language plpgsql security definer set search_path = public as $$
+declare v_promo record;
+begin
+  if auth.uid() is null or auth.uid() <> p_user_id then raise exception 'Unauthorized'; end if;
+  if exists (select 1 from public.promo_redemptions where user_id = auth.uid() and code = upper(trim(p_code))) then
+    return json_build_object('error', 'Code déjà utilisé');
+  end if;
+  update public.promo_codes set use_count = use_count + 1
+   where code = upper(trim(p_code)) and active = true and (max_uses is null or use_count < max_uses)
+   returning * into v_promo;
+  if not found then return json_build_object('error', 'Code invalide ou expiré'); end if;
+  insert into public.promo_redemptions(user_id, code) values (auth.uid(), upper(trim(p_code)));
+  update public.profiles
+     set premium_type = v_promo.type,
+         premium_expires_at = greatest(coalesce(premium_expires_at, now()), now()) + (v_promo.months || ' months')::interval
+   where id = auth.uid() and coalesce(premium_type, 'free') not in ('dev');
+  return json_build_object('success', true);
+end $$;
+revoke execute on function public.apply_promo_code_safe(uuid, text) from anon, public;
+grant execute on function public.apply_promo_code_safe(uuid, text) to authenticated;
+
+-- ── LOW ─────────────────────────────────────────────────────────────────────
+-- search_path sur les fonctions definer historiques.
+alter function public.handle_new_user() set search_path = public;
+alter function public.start_free_trial_safe(uuid) set search_path = public;
+alter function public.protect_premium_fields() set search_path = public;
+alter function public.check_plan_activation_premium() set search_path = public;
+revoke execute on function public.start_free_trial_safe(uuid) from anon, public;
+grant execute on function public.start_free_trial_safe(uuid) to authenticated;
+
+-- Fonctions internes non appelables par les clients.
+revoke execute on function public.club_members_sync_premium() from public, anon, authenticated;
+revoke execute on function public.clubs_resync_premium() from public, anon, authenticated;
+
+-- Membres fondateurs : chacun ne lit que sa ligne (le compteur passe par founding_spots_remaining()).
+-- (appliqué après mise à jour de l'app : voir note)
+
+-- Tickets support : l'utilisateur ne pré-remplit pas la réponse.
+drop policy if exists "Users insert own tickets" on public.support_tickets;
+create policy "Users insert own tickets" on public.support_tickets for insert
+  with check (user_id = auth.uid() and answer is null and coalesce(status, 'open') = 'open');
+
+-- Annonces / séances / séances à faire : auteur et coach = soi (sauf admin du club).
+create or replace function public.club_staff_authorship()
+returns trigger language plpgsql security invoker set search_path = public as $$
+begin
+  if current_user = 'authenticated' then
+    if tg_table_name = 'club_announcements' then
+      if new.author_id is distinct from auth.uid() and not public.club_role(new.club_id, 'admin') then new.author_id := auth.uid(); end if;
+    else
+      if new.coach_id is not null and new.coach_id is distinct from auth.uid() and not public.club_role(new.club_id, 'admin') then
+        new.coach_id := auth.uid();
+      end if;
+    end if;
+  end if;
+  return new;
+end $$;
+drop trigger if exists club_staff_authorship on public.club_announcements;
+create trigger club_staff_authorship before insert or update on public.club_announcements for each row execute function public.club_staff_authorship();
+drop trigger if exists club_staff_authorship on public.club_sessions;
+create trigger club_staff_authorship before insert or update on public.club_sessions for each row execute function public.club_staff_authorship();
+drop trigger if exists club_staff_authorship on public.club_workouts;
+create trigger club_staff_authorship before insert or update on public.club_workouts for each row execute function public.club_staff_authorship();
+
+-- Le staff ne réserve que pour des membres actifs du club.
+drop policy if exists bookings_staff on public.club_bookings;
+create policy bookings_staff on public.club_bookings for all
+  using (exists (select 1 from public.club_sessions s where s.id = session_id and public.is_club_staff(s.club_id)))
+  with check (exists (select 1 from public.club_sessions s join public.club_members m on m.club_id = s.club_id
+                      where s.id = session_id and public.is_club_staff(s.club_id)
+                        and m.user_id = club_bookings.user_id and m.status = 'active'));
+
+-- Compteur de visites : chemins bornés.
+create or replace function public.track_page_view(p_path text)
+returns void language plpgsql security definer set search_path = public as $$
+declare p text;
+begin
+  p := left(coalesce(nullif(regexp_replace(coalesce(p_path, '/'), '\?.*$', ''), ''), '/'), 120);
+  if p !~ '^/[a-zA-Z0-9/_\-.%]*$' then return; end if;
+  if (select count(distinct path) from public.site_page_views where day = current_date) > 500
+     and not exists (select 1 from public.site_page_views where day = current_date and path = p) then
+    return;
+  end if;
+  insert into public.site_page_views(day, path, views) values (current_date, p, 1)
+  on conflict (day, path) do update set views = site_page_views.views + 1;
+end $$;
+
+-- ============================================================================
+-- V12 — Données de santé sensibles (RGPD art. 9) + petits durcissements
+-- ============================================================================
+-- Le suivi du cycle (règles, endométriose, SOPK, contraception) quitte plans.athlete_metrics
+-- (lisible par le coach, le staff du club, les devs) pour une table lisible par l'athlète seul.
+create table if not exists public.athlete_health (
+  user_id    uuid primary key references public.profiles(id) on delete cascade,
+  cycle      jsonb,
+  updated_at timestamptz not null default now()
+);
+alter table public.athlete_health enable row level security;
+drop policy if exists athlete_health_own on public.athlete_health;
+create policy athlete_health_own on public.athlete_health for all
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+-- Toute écriture de athlete_metrics.cycle dans un plan (y compris par une ancienne
+-- version de l'app) est déplacée vers athlete_health et retirée du plan.
+create or replace function public.plans_extract_health()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if new.athlete_metrics ? 'cycle' then
+    insert into public.athlete_health(user_id, cycle, updated_at)
+    values (new.user_id, new.athlete_metrics->'cycle', now())
+    on conflict (user_id) do update set cycle = excluded.cycle, updated_at = now();
+    new.athlete_metrics := new.athlete_metrics - 'cycle';
+  end if;
+  return new;
+end $$;
+revoke execute on function public.plans_extract_health() from public, anon, authenticated;
+drop trigger if exists plans_extract_health on public.plans;
+create trigger plans_extract_health before insert or update on public.plans
+  for each row execute function public.plans_extract_health();
+
+-- Migration des données existantes (le trigger fait le déplacement).
+update public.plans set athlete_metrics = athlete_metrics where athlete_metrics ? 'cycle';
+
+-- Champs de profil que l'utilisateur ne doit pas modifier lui-même.
+create or replace function public.protect_premium_columns()
+returns trigger language plpgsql security invoker set search_path = public as $$
+begin
+  if current_user = 'authenticated' then
+    new.premium_type       := old.premium_type;
+    new.premium_expires_at := old.premium_expires_at;
+    new.premium_cancelled  := old.premium_cancelled;
+    new.premium_code       := old.premium_code;
+    new.premium_months     := old.premium_months;
+    new.is_premium         := old.is_premium;
+    new.role               := old.role;
+    new.email              := old.email;
+    new.dev_mode           := old.dev_mode;
+    new.gems_score         := old.gems_score;
+  end if;
+  return new;
+end $$;
+
+-- Retours (feedback) : tailles bornées contre le spam.
+alter table public.feedback drop constraint if exists feedback_lengths;
+alter table public.feedback add constraint feedback_lengths check (
+  length(coalesce(message, '')) <= 4000 and length(coalesce(email, '')) <= 200
+  and length(coalesce(category, '')) <= 80 and length(coalesce(situation, '')) <= 200
+  and length(coalesce(age_range, '')) <= 40 and length(coalesce(niveau, '')) <= 80) not valid;
+
+-- ============================================================================
+-- V10 — Sécurité des fonctions serveur (achats, Strava, plans du coach)
+-- ============================================================================
+-- ═══════════════════════════════════════════════════════════════════
+-- GEMS — V10 sécurité (Edge Functions)
+-- À exécuter AVANT le déploiement des fonctions (Supabase Dashboard → SQL Editor).
+-- Idempotent : peut être rejoué sans effet de bord.
+-- ═══════════════════════════════════════════════════════════════════
+-- Contenu :
+--   1. app_store_transactions      — binding original_transaction_id → user_id (C1/C2)
+--   2. strava_oauth_states + RPC   — nonce OAuth Strava à usage unique (H1)
+--   3. plans_guard_coach_managed   — l'athlète ne modifie pas weeks/dates d'un plan coaché (H3)
+--   4. strava_webhook_events       — dédoublonnage des retries Strava (M2)
+-- ═══════════════════════════════════════════════════════════════════
+
+begin;
+
+create extension if not exists pgcrypto with schema extensions;
+
+-- ── 1. Binding des abonnements App Store ────────────────────────────
+-- Un original_transaction_id Apple (= un abonnement) ne peut débloquer qu'UN
+-- compte GEMS. Écrit uniquement par verify-purchase / app-store-notifications
+-- (service_role). RLS activée, AUCUNE policy client.
+create table if not exists public.app_store_transactions (
+  original_transaction_id text primary key,
+  user_id           uuid not null references public.profiles(id) on delete cascade,
+  app_account_token uuid,
+  bound_via         text not null default 'verify-purchase',
+  product_id        text,
+  environment       text,
+  last_expires_at   timestamptz,
+  last_active       boolean,
+  created_at        timestamptz not null default now(),
+  updated_at        timestamptz not null default now()
+);
+create index if not exists app_store_transactions_user_idx on public.app_store_transactions(user_id);
+alter table public.app_store_transactions enable row level security;
+revoke all on public.app_store_transactions from anon, authenticated;
+
+-- ── 2. Nonce OAuth Strava ───────────────────────────────────────────
+create table if not exists public.strava_oauth_states (
+  nonce      text primary key,
+  user_id    uuid not null references public.profiles(id) on delete cascade,
+  expires_at timestamptz not null
+);
+create index if not exists strava_oauth_states_user_idx on public.strava_oauth_states(user_id);
+create index if not exists strava_oauth_states_expires_idx on public.strava_oauth_states(expires_at);
+alter table public.strava_oauth_states enable row level security;
+revoke all on public.strava_oauth_states from anon, authenticated;
+
+-- Retourne un nonce (64 caractères hex, 32 octets aléatoires, TTL 10 min) à passer
+-- en paramètre `state` de l'URL d'autorisation Strava. Consommé par strava-callback.
+create or replace function public.create_strava_oauth_state()
+returns text
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  v_uid   uuid := auth.uid();
+  v_nonce text;
+begin
+  if v_uid is null then
+    raise exception 'AUTH_REQUIRED' using errcode = 'P0001';
+  end if;
+
+  -- Purge des nonces expirés (tous utilisateurs) + plafonnement à 5 nonces actifs par utilisateur.
+  delete from public.strava_oauth_states where expires_at < now();
+  delete from public.strava_oauth_states
+   where user_id = v_uid
+     and nonce not in (
+       select nonce from public.strava_oauth_states
+        where user_id = v_uid order by expires_at desc limit 4);
+
+  v_nonce := encode(extensions.gen_random_bytes(32), 'hex');
+  insert into public.strava_oauth_states (nonce, user_id, expires_at)
+  values (v_nonce, v_uid, now() + interval '10 minutes');
+  return v_nonce;
+end;
+$$;
+
+revoke all on function public.create_strava_oauth_state() from public, anon;
+grant execute on function public.create_strava_oauth_state() to authenticated;
+
+-- ── 3. Plans gérés par un coach ─────────────────────────────────────
+-- Plan « coaché » = athlete_metrics.coachEdited = true, ou coachId non vide, ou
+-- planType = 'coach'. Pour un tel plan, l'ATHLÈTE (rôle authenticated,
+-- auth.uid() = propriétaire) ne peut pas modifier weeks / start_date / goal_date,
+-- et les marqueurs coach (coachId / coachEdited / planType='coach') sont
+-- conservés même si le client réécrit athlete_metrics en entier (l'app Android
+-- réécrit athlete_metrics sans ces clés). Le reste (completed_sessions, pbs,
+-- is_active, autres métriques) reste modifiable.
+-- Coachs, staff de club, service_role (Edge Functions) et fonctions
+-- SECURITY DEFINER ne sont pas concernés.
+create or replace function public.plans_guard_coach_managed()
+returns trigger
+language plpgsql
+security invoker
+set search_path = public
+as $$
+declare
+  om jsonb;
+  nm jsonb;
+begin
+  if current_user <> 'authenticated' then
+    return new;
+  end if;
+  if auth.uid() is distinct from old.user_id then
+    return new;                           -- coach / staff : non concerné
+  end if;
+
+  om := coalesce(old.athlete_metrics::jsonb, '{}'::jsonb);
+  if jsonb_typeof(om) <> 'object' then
+    return new;
+  end if;
+  if not (
+       coalesce(om -> 'coachEdited' = 'true'::jsonb, false)
+    or coalesce(om ->> 'coachId', '') <> ''
+    or coalesce(om ->> 'planType', '') = 'coach'
+  ) then
+    return new;                           -- plan non coaché
+  end if;
+
+  if new.weeks::jsonb is distinct from old.weeks::jsonb
+     or new.start_date is distinct from old.start_date
+     or new.goal_date  is distinct from old.goal_date then
+    raise exception 'COACH_MANAGED'
+      using errcode = 'P0001',
+            hint = 'Ce plan est géré par ton coach : seules ses modifications sont autorisées.';
+  end if;
+
+  -- Conserve les marqueurs coach.
+  nm := coalesce(new.athlete_metrics::jsonb, '{}'::jsonb);
+  if jsonb_typeof(nm) <> 'object' then nm := '{}'::jsonb; end if;
+  if om ? 'coachId'     then nm := jsonb_set(nm, '{coachId}',     om -> 'coachId');     end if;
+  if om ? 'coachEdited' then nm := jsonb_set(nm, '{coachEdited}', om -> 'coachEdited'); end if;
+  if om ->> 'planType' = 'coach' then nm := jsonb_set(nm, '{planType}', om -> 'planType'); end if;
+  if nm is distinct from coalesce(new.athlete_metrics::jsonb, '{}'::jsonb) then
+    new.athlete_metrics := nm;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists plans_guard_coach_managed on public.plans;
+create trigger plans_guard_coach_managed
+  before update on public.plans
+  for each row execute function public.plans_guard_coach_managed();
+
+-- ── 4. Dédoublonnage des events Strava ──────────────────────────────
+-- Strava rejoue un event non acquitté (jusqu'à 3 fois) : on supprime les
+-- doublons existants puis on pose l'index unique utilisé par strava-webhook
+-- (insert → 23505 ignoré).
+delete from public.strava_webhook_events a
+ using public.strava_webhook_events b
+ where a.user_id     = b.user_id
+   and a.activity_id = b.activity_id
+   and a.aspect_type = b.aspect_type
+   and a.event_time  = b.event_time
+   and (coalesce(a.processed, false)::int < coalesce(b.processed, false)::int
+        or (coalesce(a.processed, false) = coalesce(b.processed, false) and a.ctid > b.ctid));
+
+create unique index if not exists strava_webhook_events_dedupe
+  on public.strava_webhook_events (user_id, activity_id, aspect_type, event_time);
+
+commit;
+
+-- ── Vérifications (lecture seule) ───────────────────────────────────
+-- select relname, relrowsecurity from pg_class where relname in ('app_store_transactions','strava_oauth_states');
+-- select tgname from pg_trigger where tgrelid = 'public.plans'::regclass and tgname = 'plans_guard_coach_managed';
+-- select indexname from pg_indexes where indexname = 'strava_webhook_events_dedupe';
+-- select has_function_privilege('authenticated', 'public.create_strava_oauth_state()', 'execute');  -- true
+-- select has_function_privilege('anon', 'public.create_strava_oauth_state()', 'execute');           -- false
+
+-- V12 bis — rotate_club_code : gen_random_bytes est dans le schéma extensions.
+alter function public.rotate_club_code(uuid) set search_path = public, extensions;
