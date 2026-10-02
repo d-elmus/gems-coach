@@ -1690,3 +1690,7 @@ commit;
 
 -- V12 bis — rotate_club_code : gen_random_bytes est dans le schéma extensions.
 alter function public.rotate_club_code(uuid) set search_path = public, extensions;
+
+-- Après déploiement du site (inscription sans vérification anonyme) :
+revoke execute on function public.check_coach_code(text) from anon, public;
+grant execute on function public.check_coach_code(text) to authenticated;
